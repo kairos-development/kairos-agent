@@ -1,0 +1,3 @@
+* @kairos-development/core-team
+/internal/domain/ @kairos-development/domain-team
+/internal/service/ @kairos-development/domain-team

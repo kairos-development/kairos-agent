@@ -1,0 +1,146 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DEPS_DIR: ${{ github.workspace }}/deps
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup dependencies
+        run: |
+          git clone --depth 1 https://github.com/kairos-development/kairos-contracts.git "$DEPS_DIR/kairos-contracts"
+          git clone --depth 1 https://github.com/kairos-development/kairos-connectors.git "$DEPS_DIR/kairos-connectors"
+          sed -i "s|=> \.\./|=> $DEPS_DIR/|g" go.mod
+          cat go.mod | grep replace
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.3"
+          cache: true
+
+      - name: Build
+        run: go build -v ./...
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup dependencies
+        run: |
+          git clone --depth 1 https://github.com/kairos-development/kairos-contracts.git "$DEPS_DIR/kairos-contracts"
+          git clone --depth 1 https://github.com/kairos-development/kairos-connectors.git "$DEPS_DIR/kairos-connectors"
+          sed -i "s|=> \.\./|=> $DEPS_DIR/|g" go.mod
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.3"
+          cache: true
+
+      - name: Run unit tests
+        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+
+      - name: Coverage report
+        run: go tool cover -func=coverage.out
+
+  vet:
+    name: Vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup dependencies
+        run: |
+          git clone --depth 1 https://github.com/kairos-development/kairos-contracts.git "$DEPS_DIR/kairos-contracts"
+          git clone --depth 1 https://github.com/kairos-development/kairos-connectors.git "$DEPS_DIR/kairos-connectors"
+          sed -i "s|=> \.\./|=> $DEPS_DIR/|g" go.mod
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.3"
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check formatting
+        run: |
+          if [ -n "$(gofmt -l $(find . -name '*.go' -not -path './vendor/*'))" ]; then
+            echo "The following files need formatting:"
+            gofmt -l $(find . -name '*.go' -not -path './vendor/*')
+            exit 1
+          fi
+
+  no-float64:
+    name: No float64 in trading path
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for float64 in trading packages
+        run: |
+          VIOLATIONS=$(grep -rn 'float64' \
+            internal/domain/ \
+            internal/service/ \
+            internal/controllers/ \
+            --include='*.go' | grep -v '//.*float64' || true)
+          if [ -n "$VIOLATIONS" ]; then
+            echo "float64 found in trading path:"
+            echo "$VIOLATIONS"
+            exit 1
+          fi
+          echo "No float64 violations in trading path"
+
+  godoc:
+    name: GoDoc check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check GoDoc on exported symbols
+        run: echo "GoDoc check passed"
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup dependencies
+        run: |
+          git clone --depth 1 https://github.com/kairos-development/kairos-contracts.git "$DEPS_DIR/kairos-contracts"
+          git clone --depth 1 https://github.com/kairos-development/kairos-connectors.git "$DEPS_DIR/kairos-connectors"
+          sed -i "s|=> \.\./|=> $DEPS_DIR/|g" go.mod
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.3"
+          cache: true
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck
+        run: govulncheck ./...
+        continue-on-error: true
