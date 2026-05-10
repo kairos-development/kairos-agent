@@ -35,6 +35,22 @@ type OrderService interface {
 	ReconcileOrders(ctx context.Context) error
 }
 
+// TradingGate validates whether new order entries may be created or submitted.
+type TradingGate interface {
+	// CheckNewEntry returns nil only when a new trade entry is allowed.
+	CheckNewEntry(ctx context.Context) error
+}
+
+// OrderServiceOption configures optional order service dependencies.
+type OrderServiceOption func(*orderService)
+
+// WithTradingGate configures a runtime safety gate for new order entries.
+func WithTradingGate(gate TradingGate) OrderServiceOption {
+	return func(s *orderService) {
+		s.tradingGate = gate
+	}
+}
+
 // CreateOrderRequest contains parameters for creating a new order.
 type CreateOrderRequest struct {
 	StrategyID  string
@@ -55,6 +71,7 @@ type orderService struct {
 	riskEngine   *risk.Engine
 	connector    *ConnectorAdapter
 	publisher    *events.Publisher
+	tradingGate  TradingGate
 }
 
 // NewOrderService creates a new order service.
@@ -67,8 +84,9 @@ func NewOrderService(
 	riskEngine *risk.Engine,
 	conn *ConnectorAdapter,
 	publisher *events.Publisher,
+	opts ...OrderServiceOption,
 ) OrderService {
-	return &orderService{
+	svc := &orderService{
 		orderRepo:    orderRepo,
 		positionRepo: positionRepo,
 		strategyRepo: strategyRepo,
@@ -78,10 +96,22 @@ func NewOrderService(
 		connector:    conn,
 		publisher:    publisher,
 	}
+
+	for _, opt := range opts {
+		if opt != nil {
+			opt(svc)
+		}
+	}
+
+	return svc
 }
 
 // CreateOrder validates and creates a new order.
 func (s *orderService) CreateOrder(ctx context.Context, req CreateOrderRequest) (*entity.Order, error) {
+	if err := s.checkNewEntry(ctx); err != nil {
+		return nil, err
+	}
+
 	// Load strategy
 	strategy, err := s.strategyRepo.GetByID(ctx, req.StrategyID)
 	if err != nil {
@@ -152,6 +182,10 @@ func (s *orderService) CreateOrder(ctx context.Context, req CreateOrderRequest) 
 
 // SubmitOrder submits a pending order to the exchange.
 func (s *orderService) SubmitOrder(ctx context.Context, orderID string) error {
+	if err := s.checkNewEntry(ctx); err != nil {
+		return err
+	}
+
 	order, err := s.orderRepo.GetByID(ctx, orderID)
 	if err != nil {
 		return fmt.Errorf("get order: %w", err)
@@ -260,6 +294,16 @@ func (s *orderService) ReconcileOrders(ctx context.Context) error {
 		}
 	}
 
+	return nil
+}
+
+func (s *orderService) checkNewEntry(ctx context.Context) error {
+	if s.tradingGate == nil {
+		return nil
+	}
+	if err := s.tradingGate.CheckNewEntry(ctx); err != nil {
+		return fmt.Errorf("trading gate: %w", err)
+	}
 	return nil
 }
 

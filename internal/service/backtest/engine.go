@@ -119,8 +119,8 @@ type Config struct {
 func DefaultConfig() *Config {
 	return &Config{
 		InitialBalance: decimal.NewFromInt(10000),
-		CommissionRate: decimal.NewFromFloat(0.0006), // 0.06%
-		SlippageBps:    decimal.NewFromInt(5),        // 0.05%
+		CommissionRate: decimal.NewFromInt(6).Shift(-4), // 0.06%
+		SlippageBps:    decimal.NewFromInt(5),           // 0.05%
 		Seed:           time.Now().UnixNano(),
 	}
 }

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -19,6 +20,12 @@ import (
 // StorageProvider defines the interface for storage operations.
 type StorageProvider interface {
 	Close() error
+}
+
+// ReconciliationService defines full state reconciliation operations.
+type ReconciliationService interface {
+	// ReconcileAll reconciles local orders and positions with exchange REST state.
+	ReconcileAll(ctx context.Context) error
 }
 
 // Engine is the core trading engine that orchestrates all components.
@@ -40,6 +47,7 @@ type Engine struct {
 
 	// Services
 	orderService     agent.OrderService
+	reconciler       ReconciliationService
 	connector        domainconnector.Connector
 	storage          StorageProvider
 	strategyExecutor *wasm.StrategyExecutor
@@ -160,6 +168,10 @@ func (e *Engine) Start() error {
 	e.wg.Add(1)
 	go e.reconciliationWorker()
 
+	// Start stream lifecycle worker
+	e.wg.Add(1)
+	go e.streamEventWorker()
+
 	// Start metrics worker
 	e.wg.Add(1)
 	go e.metricsWorker()
@@ -170,9 +182,6 @@ func (e *Engine) Start() error {
 
 // Stop gracefully stops the engine.
 func (e *Engine) Stop() error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
 	e.logger.Info("Stopping engine")
 
 	// Transition to Halted state (if not already halted)
@@ -184,7 +193,9 @@ func (e *Engine) Stop() error {
 	}
 
 	// Cancel context to stop all workers
+	e.mu.Lock()
 	e.cancel()
+	e.mu.Unlock()
 
 	// Wait for all workers to finish
 	e.wg.Wait()
@@ -220,10 +231,14 @@ func (e *Engine) EventBus() *EventBus {
 // handleStateTransitions listens for state transitions and publishes events.
 func (e *Engine) handleStateTransitions(ch <-chan StateTransition) {
 	defer e.wg.Done()
+	defer e.recoverWorker("state_transitions")
 
 	for {
 		select {
-		case transition := <-ch:
+		case transition, ok := <-ch:
+			if !ok {
+				return
+			}
 			e.logger.WithFields(logrus.Fields{
 				"from":      transition.From.String(),
 				"to":        transition.To.String(),
@@ -259,6 +274,7 @@ func (e *Engine) handleStateTransitions(ch <-chan StateTransition) {
 // ntpSyncWorker periodically checks NTP drift and halts trading if drift is too high.
 func (e *Engine) ntpSyncWorker() {
 	defer e.wg.Done()
+	defer e.recoverWorker("ntp_sync")
 
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
@@ -376,9 +392,180 @@ func (e *Engine) ntpSyncWorker() {
 	}
 }
 
+// streamEventWorker reacts to connector WebSocket lifecycle events.
+func (e *Engine) streamEventWorker() {
+	defer e.wg.Done()
+	defer e.recoverWorker("stream_events")
+
+	retryTicker := time.NewTicker(1 * time.Second)
+	defer retryTicker.Stop()
+
+	var streamEvents <-chan *domainconnector.StreamEvent
+
+	for {
+		if streamEvents == nil {
+			conn := e.GetConnector()
+			if conn == nil {
+				if !e.waitForStreamEventRetry(retryTicker) {
+					return
+				}
+				continue
+			}
+
+			subscriber, ok := conn.(domainconnector.StreamEventSubscriber)
+			if !ok {
+				if !e.waitForStreamEventRetry(retryTicker) {
+					return
+				}
+				continue
+			}
+
+			ch, err := subscriber.SubscribeStreamEvents(e.ctx)
+			if err != nil {
+				e.logger.WithError(err).Debug("Stream event subscription unavailable")
+				if !e.waitForStreamEventRetry(retryTicker) {
+					return
+				}
+				continue
+			}
+			streamEvents = ch
+		}
+
+		select {
+		case event, ok := <-streamEvents:
+			if !ok {
+				streamEvents = nil
+				if !e.waitForStreamEventRetry(retryTicker) {
+					return
+				}
+				continue
+			}
+			e.handleStreamEvent(event)
+
+		case <-e.ctx.Done():
+			return
+		}
+	}
+}
+
+func (e *Engine) waitForStreamEventRetry(ticker *time.Ticker) bool {
+	select {
+	case <-ticker.C:
+		return true
+	case <-e.ctx.Done():
+		return false
+	}
+}
+
+func (e *Engine) handleStreamEvent(event *domainconnector.StreamEvent) {
+	if event == nil {
+		return
+	}
+
+	occurredAt := event.OccurredAtUTC
+	if occurredAt.IsZero() {
+		occurredAt = time.Now().UTC()
+	}
+
+	e.logger.WithFields(logrus.Fields{
+		"type":        event.Type,
+		"source":      event.Source,
+		"reason":      event.Reason,
+		"occurred_at": occurredAt,
+	}).Warn("Connector stream lifecycle event received")
+
+	switch event.Type {
+	case domainconnector.StreamEventDisconnected:
+		e.publishStreamLifecycleAlert(AlertLevelWarning, event, "Connector stream disconnected")
+		e.haltLiveTradingForStreamEvent(event)
+
+	case domainconnector.StreamEventGap:
+		e.publishStreamLifecycleAlert(AlertLevelCritical, event, "Connector stream gap detected")
+		e.haltLiveTradingForStreamEvent(event)
+		e.reconcileAfterStreamEvent(event)
+
+	case domainconnector.StreamEventReconnected:
+		e.publishStreamLifecycleAlert(AlertLevelWarning, event, "Connector stream reconnected")
+		e.reconcileAfterStreamEvent(event)
+
+	default:
+		e.publishStreamLifecycleAlert(AlertLevelWarning, event, "Connector stream event received")
+	}
+}
+
+func (e *Engine) haltLiveTradingForStreamEvent(event *domainconnector.StreamEvent) {
+	if e.stateMachine.Current() != StateLiveTrading {
+		return
+	}
+
+	reason := fmt.Sprintf("connector stream %s: %s", event.Type, event.Reason)
+	if err := e.stateMachine.Transition(StateHalted, reason); err != nil {
+		e.logger.WithError(err).WithField("stream_event", event.Type).Error("Failed to halt live trading after stream event")
+	}
+}
+
+func (e *Engine) reconcileAfterStreamEvent(event *domainconnector.StreamEvent) {
+	ctx, cancel := context.WithTimeout(e.ctx, 30*time.Second)
+	defer cancel()
+
+	e.mu.RLock()
+	reconciler := e.reconciler
+	orderService := e.orderService
+	e.mu.RUnlock()
+
+	if reconciler != nil {
+		if err := reconciler.ReconcileAll(ctx); err != nil {
+			e.publishStreamReconciliationError(event, err)
+			return
+		}
+		e.logger.WithField("stream_event", event.Type).Info("Full reconciliation completed after stream event")
+		return
+	}
+
+	if orderService != nil {
+		if err := orderService.ReconcileOrders(ctx); err != nil {
+			e.publishStreamReconciliationError(event, err)
+			return
+		}
+		e.logger.WithField("stream_event", event.Type).Info("Order reconciliation completed after stream event")
+		return
+	}
+
+	e.logger.WithField("stream_event", event.Type).Warn("No reconciliation service configured for stream event")
+}
+
+func (e *Engine) publishStreamLifecycleAlert(level AlertLevel, event *domainconnector.StreamEvent, message string) {
+	alert := &AlertEvent{
+		BaseEvent: BaseEvent{
+			EventType: EventTypeAlert,
+			EventQoS:  QoS1,
+		},
+		Level:     level,
+		Message:   fmt.Sprintf("%s: %s", message, event.Reason),
+		Timestamp: time.Now().UTC(),
+	}
+	e.eventBus.Publish(alert)
+}
+
+func (e *Engine) publishStreamReconciliationError(event *domainconnector.StreamEvent, err error) {
+	e.logger.WithError(err).WithField("stream_event", event.Type).Error("Reconciliation after stream event failed")
+
+	errorEvent := &ErrorEvent{
+		BaseEvent: BaseEvent{
+			EventType: EventTypeError,
+			EventQoS:  QoS1,
+		},
+		Error:     err,
+		Message:   fmt.Sprintf("Reconciliation after stream event failed: %s", event.Type),
+		Timestamp: time.Now().UTC(),
+	}
+	e.eventBus.Publish(errorEvent)
+}
+
 // reconciliationWorker periodically reconciles local state with exchange state.
 func (e *Engine) reconciliationWorker() {
 	defer e.wg.Done()
+	defer e.recoverWorker("reconciliation")
 
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
@@ -424,6 +611,7 @@ func (e *Engine) reconciliationWorker() {
 // metricsWorker periodically updates system metrics.
 func (e *Engine) metricsWorker() {
 	defer e.wg.Done()
+	defer e.recoverWorker("metrics")
 
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -447,6 +635,34 @@ func (e *Engine) metricsWorker() {
 			return
 		}
 	}
+}
+
+func (e *Engine) recoverWorker(name string) {
+	r := recover()
+	if r == nil {
+		return
+	}
+
+	e.logger.WithFields(logrus.Fields{
+		"worker": name,
+		"panic":  r,
+		"stack":  string(debug.Stack()),
+	}).Error("Engine worker panic recovered")
+
+	if err := e.stateMachine.Transition(StateHalted, fmt.Sprintf("%s worker panic recovered", name)); err != nil {
+		e.logger.WithError(err).WithField("worker", name).Error("Failed to transition to halted after worker panic")
+	}
+
+	alert := &AlertEvent{
+		BaseEvent: BaseEvent{
+			EventType: EventTypeAlert,
+			EventQoS:  QoS1,
+		},
+		Level:     AlertLevelCritical,
+		Message:   fmt.Sprintf("Engine worker %s recovered from panic", name),
+		Timestamp: time.Now().UTC(),
+	}
+	e.eventBus.Publish(alert)
 }
 
 // StateTransitionEvent is published when the engine state changes.
@@ -534,6 +750,13 @@ func (e *Engine) SetConnector(c domainconnector.Connector) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.connector = c
+}
+
+// SetReconciliationService sets the full reconciliation service.
+func (e *Engine) SetReconciliationService(reconciler ReconciliationService) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.reconciler = reconciler
 }
 
 // GetStorage returns the storage provider instance.

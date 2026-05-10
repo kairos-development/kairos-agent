@@ -78,6 +78,13 @@ func (d *Dashboard) renderSystemStatus() string {
 		d.colorizeLicense(d.vm.SystemStatus.License),
 		d.vm.SystemStatus.Uptime,
 	)
+	if d.vm.SystemStatus.HaltReason != "" {
+		haltLine := fmt.Sprintf("Halted: %s", d.vm.SystemStatus.HaltReason)
+		if d.vm.SystemStatus.HaltedAt != "" {
+			haltLine = fmt.Sprintf("%s at %s", haltLine, d.vm.SystemStatus.HaltedAt)
+		}
+		content += "\n" + styles.LogErrorStyle.Render(haltLine)
+	}
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

@@ -7,10 +7,13 @@ import (
 
 	"github.com/kairos-development/kairos-agent/internal/domain/connector"
 	"github.com/kairos-development/kairos-agent/internal/domain/entity"
+	"github.com/kairos-development/kairos-agent/internal/service/reconciliation"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+var _ reconciliation.ExchangeConnector = (*ConnectorAdapter)(nil)
 
 type mockConnector struct {
 	submitOrderFunc        func(ctx context.Context, order *entity.Order) (string, error)
@@ -159,6 +162,17 @@ func (m *mockConnector) SubscribeTicker(ctx context.Context, symbol string) (<-c
 	return ch, nil
 }
 
+type mockPositionSnapshotConnector struct {
+	*mockConnector
+
+	positions    []*entity.Position
+	positionsErr error
+}
+
+func (m *mockPositionSnapshotConnector) GetPositions(ctx context.Context) ([]*entity.Position, error) {
+	return m.positions, m.positionsErr
+}
+
 func TestNewConnectorAdapter(t *testing.T) {
 	conn := &mockConnector{}
 	adapter := NewConnectorAdapter(conn)
@@ -230,6 +244,20 @@ func TestConnectorAdapter_CancelOrder_Error(t *testing.T) {
 	assert.ErrorIs(t, err, expectedErr)
 }
 
+func TestConnectorAdapter_GetOpenOrders_Success(t *testing.T) {
+	expectedOrders := []*entity.Order{{ID: "order-123", Symbol: "BTCUSDT"}}
+	conn := &mockConnector{
+		getOpenOrdersFunc: func(ctx context.Context) ([]*entity.Order, error) {
+			return expectedOrders, nil
+		},
+	}
+	adapter := NewConnectorAdapter(conn)
+
+	orders, err := adapter.GetOpenOrders(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, expectedOrders, orders)
+}
+
 func TestConnectorAdapter_QueryOrder_Success(t *testing.T) {
 	expectedOrder := &entity.Order{
 		ID:     "order-123",
@@ -260,6 +288,25 @@ func TestConnectorAdapter_QueryOrder_Error(t *testing.T) {
 
 	_, err := adapter.QueryOrder(context.Background(), "order-123")
 	assert.ErrorIs(t, err, expectedErr)
+}
+
+func TestConnectorAdapter_QueryOrderStatus_Success(t *testing.T) {
+	expectedOrder := &entity.Order{
+		ID:     "order-123",
+		Symbol: "BTCUSDT",
+		Status: entity.OrderStatusFilled,
+	}
+	conn := &mockConnector{
+		queryOrderFunc: func(ctx context.Context, orderID string) (*entity.Order, error) {
+			assert.Equal(t, "exchange-order-123", orderID)
+			return expectedOrder, nil
+		},
+	}
+	adapter := NewConnectorAdapter(conn)
+
+	order, err := adapter.QueryOrderStatus(context.Background(), "exchange-order-123")
+	require.NoError(t, err)
+	assert.Equal(t, expectedOrder, order)
 }
 
 func TestConnectorAdapter_GetPosition_Success(t *testing.T) {
@@ -294,6 +341,31 @@ func TestConnectorAdapter_GetPosition_Error(t *testing.T) {
 
 	_, err := adapter.GetPosition(context.Background(), "BTCUSDT")
 	assert.ErrorIs(t, err, expectedErr)
+}
+
+func TestConnectorAdapter_GetPositions_Success(t *testing.T) {
+	expectedPositions := []*entity.Position{{
+		ID:       "pos-123",
+		Symbol:   "BTCUSDT",
+		Side:     entity.PositionSideLong,
+		Quantity: decimal.NewFromFloat(0.1),
+	}}
+	conn := &mockPositionSnapshotConnector{
+		mockConnector: &mockConnector{},
+		positions:     expectedPositions,
+	}
+	adapter := NewConnectorAdapter(conn)
+
+	positions, err := adapter.GetPositions(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, expectedPositions, positions)
+}
+
+func TestConnectorAdapter_GetPositions_Unsupported(t *testing.T) {
+	adapter := NewConnectorAdapter(&mockConnector{})
+
+	_, err := adapter.GetPositions(context.Background())
+	assert.ErrorIs(t, err, connector.ErrPositionSnapshotsUnsupported)
 }
 
 func TestConnectorAdapter_GetBalance_Success(t *testing.T) {

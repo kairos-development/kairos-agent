@@ -57,6 +57,8 @@ func TestRuntimeStatus_Fields(t *testing.T) {
 		Integrity:         IntegrityStateTrusted,
 		NTPDrift:          50 * time.Millisecond,
 		NewEntriesBlocked: false,
+		HaltReason:        "operator stop",
+		HaltedAtUTC:       &now,
 		Banner:            "Test Banner",
 		AnalyticsDegraded: false,
 		LastUpdatedAtUTC:  now,
@@ -68,6 +70,8 @@ func TestRuntimeStatus_Fields(t *testing.T) {
 	assert.Equal(t, IntegrityStateTrusted, status.Integrity)
 	assert.Equal(t, 50*time.Millisecond, status.NTPDrift)
 	assert.False(t, status.NewEntriesBlocked)
+	assert.Equal(t, "operator stop", status.HaltReason)
+	assert.Equal(t, &now, status.HaltedAtUTC)
 	assert.Equal(t, "Test Banner", status.Banner)
 	assert.False(t, status.AnalyticsDegraded)
 	assert.Equal(t, now, status.LastUpdatedAtUTC)

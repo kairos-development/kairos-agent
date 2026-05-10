@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/jmoiron/sqlx"
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 func RunMigrations(ctx context.Context, db *sqlx.DB) error {
@@ -79,7 +79,7 @@ func migrateCreateCriticalTables(db *sqlx.DB) error {
 	return err
 }
 
-func ExecInTransaction(ctx context.Context, db *sqlx.DB, fn func(*sql.Tx) error) error {
+func ExecInTransaction(ctx context.Context, db *sqlx.DB, fn func(*sql.Tx) error) (err error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -87,8 +87,8 @@ func ExecInTransaction(ctx context.Context, db *sqlx.DB, fn func(*sql.Tx) error)
 
 	defer func() {
 		if p := recover(); p != nil {
-			tx.Rollback()
-			panic(p)
+			_ = tx.Rollback()
+			err = fmt.Errorf("transaction panic recovered: %v", p)
 		}
 	}()
 

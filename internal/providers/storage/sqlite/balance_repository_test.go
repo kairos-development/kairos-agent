@@ -88,6 +88,21 @@ func TestBalanceRepository_Save(t *testing.T) {
 	assert.Equal(t, "USDT", retrieved.Balances[1].Asset)
 }
 
+func TestBalanceRepository_GetLatest_RejectsCorruptDecimal(t *testing.T) {
+	db, cleanup := setupBalanceTestDB(t)
+	defer cleanup()
+
+	_, err := db.Conn().Exec(
+		`INSERT INTO balances (asset, total, available, locked, updated_at_utc) VALUES (?, ?, ?, ?, ?)`,
+		"USDT", "not-a-decimal", "1", "0", time.Now().UTC().Format(time.RFC3339Nano),
+	)
+	require.NoError(t, err)
+
+	_, err = NewBalanceRepository(db).GetLatest(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "balances.total")
+}
+
 func TestBalanceRepository_Save_EmptyBalances(t *testing.T) {
 	db, cleanup := setupBalanceTestDB(t)
 	defer cleanup()

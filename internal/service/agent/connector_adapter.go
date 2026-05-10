@@ -27,14 +27,33 @@ func (a *ConnectorAdapter) CancelOrder(ctx context.Context, orderID string) erro
 	return a.conn.CancelOrder(ctx, orderID)
 }
 
+// GetOpenOrders retrieves all active orders from the exchange.
+func (a *ConnectorAdapter) GetOpenOrders(ctx context.Context) ([]*entity.Order, error) {
+	return a.conn.GetOpenOrders(ctx)
+}
+
 // QueryOrder retrieves order status from the exchange.
 func (a *ConnectorAdapter) QueryOrder(ctx context.Context, orderID string) (*entity.Order, error) {
 	return a.conn.QueryOrder(ctx, orderID)
 }
 
+// QueryOrderStatus retrieves order status from the exchange.
+func (a *ConnectorAdapter) QueryOrderStatus(ctx context.Context, exchangeOrderID string) (*entity.Order, error) {
+	return a.conn.QueryOrder(ctx, exchangeOrderID)
+}
+
 // GetPosition retrieves a position from the exchange.
 func (a *ConnectorAdapter) GetPosition(ctx context.Context, symbol string) (*entity.Position, error) {
 	return a.conn.GetPosition(ctx, symbol)
+}
+
+// GetPositions retrieves all non-flat positions from the exchange.
+func (a *ConnectorAdapter) GetPositions(ctx context.Context) ([]*entity.Position, error) {
+	reader, ok := a.conn.(domainconnector.PositionSnapshotReader)
+	if !ok {
+		return nil, domainconnector.ErrPositionSnapshotsUnsupported
+	}
+	return reader.GetPositions(ctx)
 }
 
 // GetBalance retrieves account balance from the exchange.

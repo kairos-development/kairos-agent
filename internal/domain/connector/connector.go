@@ -2,11 +2,18 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/kairos-development/kairos-agent/internal/domain/entity"
 	"github.com/shopspring/decimal"
 )
+
+// ErrStreamEventsUnsupported indicates that a connector does not expose stream lifecycle events.
+var ErrStreamEventsUnsupported = errors.New("stream events unsupported")
+
+// ErrPositionSnapshotsUnsupported indicates that a connector cannot return full position snapshots.
+var ErrPositionSnapshotsUnsupported = errors.New("position snapshots unsupported")
 
 // Connector defines the interface for exchange connectivity.
 // Implementations must handle REST execution, WebSocket streams, reconnection,
@@ -68,6 +75,42 @@ type Connector interface {
 
 	// SubscribeTicker subscribes to market ticker updates via WebSocket.
 	SubscribeTicker(ctx context.Context, symbol string) (<-chan *TickerUpdate, error)
+}
+
+// StreamEventSubscriber is implemented by connectors that expose transport-level
+// stream lifecycle events such as disconnects, reconnects, and detected gaps.
+type StreamEventSubscriber interface {
+	// SubscribeStreamEvents subscribes to WebSocket lifecycle events.
+	SubscribeStreamEvents(ctx context.Context) (<-chan *StreamEvent, error)
+}
+
+// PositionSnapshotReader is implemented by connectors that can return a full
+// REST snapshot of account positions for reconciliation.
+type PositionSnapshotReader interface {
+	// GetPositions retrieves all non-flat positions for the account.
+	GetPositions(ctx context.Context) ([]*entity.Position, error)
+}
+
+// StreamEventType identifies a connector stream lifecycle event.
+type StreamEventType string
+
+const (
+	// StreamEventDisconnected indicates that a streaming connection was lost.
+	StreamEventDisconnected StreamEventType = "disconnected"
+
+	// StreamEventReconnected indicates that a streaming connection recovered.
+	StreamEventReconnected StreamEventType = "reconnected"
+
+	// StreamEventGap indicates that the connector detected a potential stream gap.
+	StreamEventGap StreamEventType = "gap"
+)
+
+// StreamEvent describes a transport-level stream lifecycle event.
+type StreamEvent struct {
+	Type          StreamEventType
+	Source        string
+	Reason        string
+	OccurredAtUTC time.Time
 }
 
 // Permissions describes API key capabilities.

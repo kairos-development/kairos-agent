@@ -19,15 +19,17 @@ func TestCheckOutputToDTOAndFormat(t *testing.T) {
 			Connectivity: entity.ConnectivityStateConnected,
 			License:      entity.LicenseStateDemo,
 			Integrity:    entity.IntegrityStateTrusted,
+			HaltReason:   "manual recovery required",
 		},
 	}
 
 	dto := CheckOutputToDTO(output)
 	assert.Equal(t, 2, dto.SchemaVersion)
 	assert.Equal(t, []string{"license", "health"}, dto.AllowedOutbound)
+	assert.Equal(t, "manual recovery required", dto.HaltReason)
 
 	rendered := FormatCheckOutput(dto)
-	for _, part := range []string{"schema_version=2", "telemetry=off", "outbound=license,health", "mode=paper_trading", "connectivity=connected", "license=demo", "integrity=trusted"} {
+	for _, part := range []string{"schema_version=2", "telemetry=off", "outbound=license,health", "mode=paper_trading", "connectivity=connected", "license=demo", "integrity=trusted", "halt_reason=manual recovery required"} {
 		assert.True(t, strings.Contains(rendered, part), rendered)
 	}
 }

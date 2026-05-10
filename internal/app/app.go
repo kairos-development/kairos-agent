@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -34,7 +35,17 @@ type Application struct {
 }
 
 // Bootstrap creates the state directory, config, audit log, vault, journal, and storage.
-func Bootstrap(ctx context.Context, stateDir string, vaultPassword string) (*Application, error) {
+func Bootstrap(ctx context.Context, stateDir string, vaultPassword string) (app *Application, err error) {
+	var closers []func() error
+	defer func() {
+		if err == nil {
+			return
+		}
+		for i := len(closers) - 1; i >= 0; i-- {
+			_ = closers[i]()
+		}
+	}()
+
 	if err := os.MkdirAll(stateDir, 0o755); err != nil {
 		return nil, err
 	}
@@ -50,20 +61,28 @@ func Bootstrap(ctx context.Context, stateDir string, vaultPassword string) (*App
 	if err != nil {
 		return nil, err
 	}
+	closers = append(closers, auditLogger.Close)
+
 	journalLog, err := journal.Open(cfg.Paths.JournalPath, cfg.JournalMaxSizeBytes)
 	if err != nil {
 		return nil, err
 	}
+	closers = append(closers, journalLog.Close)
+
 	store, err := storage.Open(stateDir, Version)
 	if err != nil {
 		return nil, err
 	}
+	closers = append(closers, store.Close)
+
 	vaultStore, err := vault.OpenOrCreate(cfg.Paths.VaultDB, vaultPassword, Version)
 	if err != nil {
 		return nil, err
 	}
+	closers = append(closers, vaultStore.Close)
+
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	app := &Application{
+	app = &Application{
 		ConfigManager: configManager,
 		Store:         store,
 		Vault:         vaultStore,
@@ -73,9 +92,18 @@ func Bootstrap(ctx context.Context, stateDir string, vaultPassword string) (*App
 		Logger:        logger,
 		StateDir:      stateDir,
 	}
-	go runtime.RunNTPWorker(ctx, 15*time.Minute, func(context.Context) (time.Duration, error) {
-		return 0, nil
-	}, app.Runtime.UpdateNTPDrift)
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Error("NTP worker panic recovered", "panic", r, "stack", string(debug.Stack()))
+			}
+		}()
+		runtime.RunNTPWorker(ctx, 15*time.Minute, func(context.Context) (time.Duration, error) {
+			return 0, nil
+		}, app.Runtime.UpdateNTPDrift)
+	}()
+
 	return app, nil
 }
 

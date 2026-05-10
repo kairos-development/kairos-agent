@@ -50,6 +50,18 @@ func (sm *StateMachine) Current() entity.RunMode {
 	return sm.current
 }
 
+// Restore sets the current state from a trusted local snapshot without notifying listeners.
+func (sm *StateMachine) Restore(current entity.RunMode, at time.Time) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	sm.previous = sm.current
+	sm.current = current
+	sm.transitionAt = at.UTC()
+}
+
 // Transition attempts a state change per instruction 8.3 rules.
 func (sm *StateMachine) Transition(to entity.RunMode, reason string) error {
 	sm.mu.Lock()

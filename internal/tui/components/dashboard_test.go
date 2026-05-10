@@ -26,6 +26,8 @@ func TestDashboard_Update(t *testing.T) {
 			License:      "demo",
 			Uptime:       "1h 30m",
 			NTPDrift:     "50ms",
+			HaltReason:   "exchange stream gap",
+			HaltedAt:     "14:32:15",
 		},
 	}
 
@@ -59,6 +61,8 @@ func TestDashboard_Render_WithData(t *testing.T) {
 			License:      "demo",
 			Uptime:       "1h 30m",
 			NTPDrift:     "50ms",
+			HaltReason:   "exchange stream gap",
+			HaltedAt:     "14:32:15",
 		},
 		Performance: viewmodel.Performance{
 			TotalPnL:      "+$1234.56",
@@ -104,6 +108,8 @@ func TestDashboard_Render_WithData(t *testing.T) {
 	assert.Contains(t, rendered, "connected")
 	assert.Contains(t, rendered, "demo")
 	assert.Contains(t, rendered, "1h 30m")
+	assert.Contains(t, rendered, "exchange stream gap")
+	assert.Contains(t, rendered, "14:32:15")
 
 	// Verify performance section
 	assert.Contains(t, rendered, "Performance")

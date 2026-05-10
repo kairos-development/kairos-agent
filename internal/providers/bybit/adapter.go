@@ -94,6 +94,11 @@ func (a *Adapter) QueryOrder(ctx context.Context, orderID string) (*entity.Order
 	return unmapOrder(connOrder), nil
 }
 
+// QueryOrderStatus retrieves the current status of an order from the exchange.
+func (a *Adapter) QueryOrderStatus(ctx context.Context, exchangeOrderID string) (*entity.Order, error) {
+	return a.QueryOrder(ctx, exchangeOrderID)
+}
+
 // GetPosition retrieves the current position for a symbol.
 func (a *Adapter) GetPosition(ctx context.Context, symbol string) (*entity.Position, error) {
 	connPos, err := a.conn.GetPosition(ctx, symbol)
@@ -102,6 +107,26 @@ func (a *Adapter) GetPosition(ctx context.Context, symbol string) (*entity.Posit
 	}
 
 	return unmapPosition(connPos), nil
+}
+
+// GetPositions retrieves all non-flat positions for the account.
+func (a *Adapter) GetPositions(ctx context.Context) ([]*entity.Position, error) {
+	reader, ok := a.conn.(connectorpkg.PositionSnapshotReader)
+	if !ok {
+		return nil, connector.ErrPositionSnapshotsUnsupported
+	}
+
+	connPositions, err := reader.GetPositions(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	positions := make([]*entity.Position, 0, len(connPositions))
+	for _, connPos := range connPositions {
+		positions = append(positions, unmapPosition(connPos))
+	}
+
+	return positions, nil
 }
 
 // GetBalance retrieves the current account balance.
@@ -184,16 +209,29 @@ func (a *Adapter) SubscribeOrders(ctx context.Context) (<-chan *connector.OrderU
 
 	go func() {
 		defer close(ch)
-		for update := range connCh {
-			ch <- &connector.OrderUpdate{
-				OrderID:         update.OrderID,
-				ClientOrderID:   update.ClientOrderID,
-				ExchangeOrderID: update.ExchangeOrderID,
-				Status:          unmapOrderStatusFromConnector(update.Status),
-				FilledQty:       update.FilledQty,
-				RemainingQty:    update.RemainingQty,
-				AvgFillPrice:    update.AvgFillPrice,
-				UpdatedAtUTC:    update.UpdatedAtUTC,
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case update, ok := <-connCh:
+				if !ok {
+					return
+				}
+				mapped := &connector.OrderUpdate{
+					OrderID:         update.OrderID,
+					ClientOrderID:   update.ClientOrderID,
+					ExchangeOrderID: update.ExchangeOrderID,
+					Status:          unmapOrderStatusFromConnector(update.Status),
+					FilledQty:       update.FilledQty,
+					RemainingQty:    update.RemainingQty,
+					AvgFillPrice:    update.AvgFillPrice,
+					UpdatedAtUTC:    update.UpdatedAtUTC,
+				}
+				select {
+				case ch <- mapped:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 	}()
@@ -212,14 +250,27 @@ func (a *Adapter) SubscribePositions(ctx context.Context) (<-chan *connector.Pos
 
 	go func() {
 		defer close(ch)
-		for update := range connCh {
-			ch <- &connector.PositionUpdate{
-				Symbol:        update.Symbol,
-				Side:          unmapPositionSideFromConnector(update.Side),
-				Quantity:      update.Quantity,
-				EntryPrice:    update.EntryPrice,
-				UnrealizedPnL: update.UnrealizedPnL,
-				UpdatedAtUTC:  update.UpdatedAtUTC,
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case update, ok := <-connCh:
+				if !ok {
+					return
+				}
+				mapped := &connector.PositionUpdate{
+					Symbol:        update.Symbol,
+					Side:          unmapPositionSideFromConnector(update.Side),
+					Quantity:      update.Quantity,
+					EntryPrice:    update.EntryPrice,
+					UnrealizedPnL: update.UnrealizedPnL,
+					UpdatedAtUTC:  update.UpdatedAtUTC,
+				}
+				select {
+				case ch <- mapped:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 	}()
@@ -238,13 +289,26 @@ func (a *Adapter) SubscribeBalance(ctx context.Context) (<-chan *connector.Balan
 
 	go func() {
 		defer close(ch)
-		for update := range connCh {
-			ch <- &connector.BalanceUpdate{
-				Asset:        update.Asset,
-				Total:        update.Total,
-				Available:    update.Available,
-				Locked:       update.Locked,
-				UpdatedAtUTC: update.UpdatedAtUTC,
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case update, ok := <-connCh:
+				if !ok {
+					return
+				}
+				mapped := &connector.BalanceUpdate{
+					Asset:        update.Asset,
+					Total:        update.Total,
+					Available:    update.Available,
+					Locked:       update.Locked,
+					UpdatedAtUTC: update.UpdatedAtUTC,
+				}
+				select {
+				case ch <- mapped:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 	}()
@@ -263,14 +327,68 @@ func (a *Adapter) SubscribeTicker(ctx context.Context, symbol string) (<-chan *c
 
 	go func() {
 		defer close(ch)
-		for update := range connCh {
-			ch <- &connector.TickerUpdate{
-				Symbol:       update.Symbol,
-				LastPrice:    update.LastPrice,
-				BidPrice:     update.BidPrice,
-				AskPrice:     update.AskPrice,
-				Volume24h:    update.Volume24h,
-				UpdatedAtUTC: update.UpdatedAtUTC,
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case update, ok := <-connCh:
+				if !ok {
+					return
+				}
+				mapped := &connector.TickerUpdate{
+					Symbol:       update.Symbol,
+					LastPrice:    update.LastPrice,
+					BidPrice:     update.BidPrice,
+					AskPrice:     update.AskPrice,
+					Volume24h:    update.Volume24h,
+					UpdatedAtUTC: update.UpdatedAtUTC,
+				}
+				select {
+				case ch <- mapped:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+
+	return ch, nil
+}
+
+// SubscribeStreamEvents subscribes to connector stream lifecycle events.
+func (a *Adapter) SubscribeStreamEvents(ctx context.Context) (<-chan *connector.StreamEvent, error) {
+	subscriber, ok := a.conn.(connectorpkg.StreamEventSubscriber)
+	if !ok {
+		return nil, connector.ErrStreamEventsUnsupported
+	}
+
+	connCh, err := subscriber.SubscribeStreamEvents(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	ch := make(chan *connector.StreamEvent, 100)
+	go func() {
+		defer close(ch)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event, ok := <-connCh:
+				if !ok {
+					return
+				}
+				mapped := &connector.StreamEvent{
+					Type:          unmapStreamEventType(event.Type),
+					Source:        event.Source,
+					Reason:        event.Reason,
+					OccurredAtUTC: event.OccurredAtUTC,
+				}
+				select {
+				case ch <- mapped:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 	}()
@@ -428,5 +546,18 @@ func unmapPositionSideFromConnector(side connectorpkg.PositionSide) entity.Posit
 		return entity.PositionSideShort
 	default:
 		return entity.PositionSideFlat
+	}
+}
+
+func unmapStreamEventType(eventType connectorpkg.StreamEventType) connector.StreamEventType {
+	switch eventType {
+	case connectorpkg.StreamEventDisconnected:
+		return connector.StreamEventDisconnected
+	case connectorpkg.StreamEventReconnected:
+		return connector.StreamEventReconnected
+	case connectorpkg.StreamEventGap:
+		return connector.StreamEventGap
+	default:
+		return connector.StreamEventType(eventType)
 	}
 }

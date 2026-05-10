@@ -14,6 +14,8 @@ type Status struct {
 	Integrity         entity.IntegrityState
 	NTPDrift          time.Duration
 	NewEntriesBlocked bool
+	HaltReason        string
+	HaltedAtUTC       *time.Time
 	Banner            string
 	AnalyticsDegraded bool
 	LastUpdatedAtUTC  time.Time

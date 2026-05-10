@@ -27,6 +27,12 @@ type PaperSimulator interface {
 	GetOrderStatus(ctx context.Context, orderID string) (*entity.Order, error)
 }
 
+// TradingGate validates whether new order entries may be submitted.
+type TradingGate interface {
+	// CheckNewEntry returns nil only when a new trade entry is allowed.
+	CheckNewEntry(ctx context.Context) error
+}
+
 // OrderRouter routes orders to either live exchange or paper simulator.
 // It maintains an in-flight journal for idempotency and timeout handling.
 type OrderRouter struct {
@@ -37,6 +43,7 @@ type OrderRouter struct {
 	simulator PaperSimulator
 	publisher *events.Publisher
 	logger    *logrus.Logger
+	gate      TradingGate
 
 	// In-flight order tracking
 	inFlight map[string]*InFlightOrder
@@ -78,6 +85,10 @@ func NewOrderRouter(
 
 // SubmitOrder submits an order through the appropriate routing destination.
 func (r *OrderRouter) SubmitOrder(ctx context.Context, order *entity.Order) (string, error) {
+	if err := r.checkNewEntry(ctx); err != nil {
+		return "", err
+	}
+
 	r.mu.Lock()
 
 	// Check in-flight limit
@@ -147,6 +158,20 @@ func (r *OrderRouter) SubmitOrder(ctx context.Context, order *entity.Order) (str
 	}).Info("Order submitted")
 
 	return exchangeOrderID, nil
+}
+
+func (r *OrderRouter) checkNewEntry(ctx context.Context) error {
+	r.mu.RLock()
+	gate := r.gate
+	r.mu.RUnlock()
+
+	if gate == nil {
+		return nil
+	}
+	if err := gate.CheckNewEntry(ctx); err != nil {
+		return fmt.Errorf("trading gate: %w", err)
+	}
+	return nil
 }
 
 // CancelOrder cancels an order through the appropriate routing destination.
@@ -257,6 +282,14 @@ func (r *OrderRouter) SetMode(mode entity.RoutingMode) {
 	r.config.Mode = mode
 
 	r.logger.WithField("mode", mode).Info("Routing mode changed")
+}
+
+// SetTradingGate configures the runtime safety gate for new entries.
+func (r *OrderRouter) SetTradingGate(gate TradingGate) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.gate = gate
 }
 
 func (r *OrderRouter) submitLive(ctx context.Context, order *entity.Order) (string, error) {

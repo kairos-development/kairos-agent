@@ -18,13 +18,14 @@ func CheckOutputToDTO(output serviceagent.CheckOutput) dto.CheckOutput {
 		Connectivity:    string(output.Status.Connectivity),
 		License:         string(output.Status.License),
 		Integrity:       string(output.Status.Integrity),
+		HaltReason:      output.Status.HaltReason,
 	}
 }
 
 // FormatCheckOutput renders the CLI check model.
 func FormatCheckOutput(output dto.CheckOutput) string {
 	return fmt.Sprintf(
-		"schema_version=%d\ntelemetry=%s\noutbound=%s\nmode=%s\nconnectivity=%s\nlicense=%s\nintegrity=%s\n",
+		"schema_version=%d\ntelemetry=%s\noutbound=%s\nmode=%s\nconnectivity=%s\nlicense=%s\nintegrity=%s\nhalt_reason=%s\n",
 		output.SchemaVersion,
 		output.Telemetry,
 		strings.Join(output.AllowedOutbound, ","),
@@ -32,5 +33,6 @@ func FormatCheckOutput(output dto.CheckOutput) string {
 		output.Connectivity,
 		output.License,
 		output.Integrity,
+		output.HaltReason,
 	)
 }

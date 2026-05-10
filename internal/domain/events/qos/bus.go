@@ -2,6 +2,8 @@ package qos
 
 import (
 	"context"
+	"fmt"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -92,6 +94,17 @@ func (b *Bus) SubscribeFunc(eventType events.EventType, fn func(context.Context,
 }
 
 func (b *Bus) Publish(ctx context.Context, event events.Event) error {
+	if event == nil {
+		return fmt.Errorf("event is nil")
+	}
+
+	b.mu.RLock()
+	closed := b.closed
+	b.mu.RUnlock()
+	if closed || b.ctx.Err() != nil {
+		return context.Canceled
+	}
+
 	b.mu.RLock()
 	handlers := b.handlers[event.Type()]
 	b.mu.RUnlock()
@@ -130,7 +143,7 @@ func (b *Bus) deliverQoS0(ctx context.Context, event events.Event, handler event
 	b.mu.Unlock()
 
 	go func() {
-		if err := handler.Handle(ctx, event); err != nil {
+		if err := b.safeHandle(ctx, event, handler); err != nil {
 			b.logger.WithError(err).WithField("event", event.Type()).Warn("QoS0 handler error (ignored)")
 		}
 	}()
@@ -144,7 +157,7 @@ func (b *Bus) deliverQoS1(ctx context.Context, event events.Event, handler event
 
 	var err error
 	for i := 0; i <= b.cfg.MaxRetries; i++ {
-		err = handler.Handle(ctx, event)
+		err = b.safeHandle(ctx, event, handler)
 		if err == nil {
 			return nil
 		}
@@ -158,13 +171,33 @@ func (b *Bus) deliverQoS1(ctx context.Context, event events.Event, handler event
 		}).Warn("QoS1 retry")
 
 		if i < b.cfg.MaxRetries {
-			time.Sleep(b.cfg.RetryInterval)
+			select {
+			case <-time.After(b.cfg.RetryInterval):
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-b.ctx.Done():
+				return b.ctx.Err()
+			}
 		}
 	}
 	return err
 }
 
 func (b *Bus) PublishAsync(ctx context.Context, event events.Event) {
+	if event == nil {
+		return
+	}
+
+	b.mu.RLock()
+	closed := b.closed
+	b.mu.RUnlock()
+	if closed || b.ctx.Err() != nil || ctx.Err() != nil {
+		b.mu.Lock()
+		b.droppedCnt++
+		b.mu.Unlock()
+		return
+	}
+
 	select {
 	case b.asyncCh <- event:
 		b.mu.Lock()
@@ -176,6 +209,21 @@ func (b *Bus) PublishAsync(ctx context.Context, event events.Event) {
 		b.mu.Unlock()
 		b.logger.WithField("event", event.Type()).Warn("QoS event dropped (buffer full)")
 	}
+}
+
+func (b *Bus) safeHandle(ctx context.Context, event events.Event, handler events.Handler) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("event handler panic: %v", r)
+			b.logger.WithFields(logrus.Fields{
+				"event": event.Type(),
+				"panic": r,
+				"stack": string(debug.Stack()),
+			}).Error("QoS event handler panic recovered")
+		}
+	}()
+
+	return handler.Handle(ctx, event)
 }
 
 func (b *Bus) asyncWorker() {

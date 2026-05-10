@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -77,6 +78,7 @@ type Manager struct {
 	totalJobsProcessed   int
 	totalJobsFailed      int
 	jobProcessingTimeSum time.Duration
+	stopped              bool
 
 	logger *logrus.Logger
 }
@@ -172,6 +174,14 @@ func (m *Manager) Submit(job *Job) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if m.stopped {
+		return fmt.Errorf("job manager stopped")
+	}
+
+	if job == nil {
+		return fmt.Errorf("job is nil")
+	}
+
 	if job.ID == "" {
 		job.ID = fmt.Sprintf("job_%d", time.Now().UnixNano())
 	}
@@ -222,6 +232,13 @@ func (m *Manager) SubmitFunc(name string, priority Priority, fn func(context.Con
 func (m *Manager) Stop() {
 	m.logger.Info("Stopping job manager")
 
+	m.mu.Lock()
+	if m.stopped {
+		m.mu.Unlock()
+		return
+	}
+	m.stopped = true
+
 	m.cancel()
 
 	// Close queues
@@ -229,6 +246,7 @@ func (m *Manager) Stop() {
 	close(m.liveQueue)
 	close(m.backgroundQueue)
 	close(m.analyticsQueue)
+	m.mu.Unlock()
 
 	// Wait for workers
 	m.wg.Wait()
@@ -292,8 +310,8 @@ func (m *Manager) executeJob(job *Job) {
 		"priority": job.Priority.String(),
 	}).Debug("Executing job")
 
-	// Execute job function
-	err := job.Fn(m.ctx)
+	// Execute job function. A single bad job must not crash the worker pool.
+	err := m.runJob(job)
 
 	completedTime := time.Now().UTC()
 	job.CompletedAt = &completedTime
@@ -326,6 +344,26 @@ func (m *Manager) executeJob(job *Job) {
 			"duration_ms": duration.Milliseconds(),
 		}).Debug("Job completed")
 	}
+}
+
+func (m *Manager) runJob(job *Job) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("job panic: %v", r)
+			m.logger.WithFields(logrus.Fields{
+				"job_id": job.ID,
+				"name":   job.Name,
+				"panic":  r,
+				"stack":  string(debug.Stack()),
+			}).Error("Job panic recovered")
+		}
+	}()
+
+	if job.Fn == nil {
+		return fmt.Errorf("job function is nil")
+	}
+
+	return job.Fn(m.ctx)
 }
 
 // Stats contains job manager statistics.

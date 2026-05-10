@@ -89,6 +89,8 @@ func TestSnapshot_DefaultValues(t *testing.T) {
 	assert.Equal(t, entity.IntegrityStateTrusted, snap.Integrity)
 	assert.False(t, snap.AnalyticsDegraded)
 	assert.False(t, snap.NewEntriesBlocked)
+	assert.Empty(t, snap.HaltReason)
+	assert.Nil(t, snap.HaltedAtUTC)
 }
 
 func TestSetLicense_RiskOnlyBanner(t *testing.T) {
@@ -323,11 +325,15 @@ func TestManagerTransition_HaltedToIdleRestart(t *testing.T) {
 	err := m.Transition(entity.RunModeHalted, "integrity failure")
 	require.NoError(t, err)
 	assert.Equal(t, entity.RunModeHalted, m.CurrentState())
+	assert.Equal(t, "integrity failure", m.Snapshot().HaltReason)
+	assert.NotNil(t, m.Snapshot().HaltedAtUTC)
 
 	// Halted -> Idle should work
 	err = m.Transition(entity.RunModeIdle, "admin restart")
 	require.NoError(t, err)
 	assert.Equal(t, entity.RunModeIdle, m.CurrentState())
+	assert.Empty(t, m.Snapshot().HaltReason)
+	assert.Nil(t, m.Snapshot().HaltedAtUTC)
 }
 
 func TestManagerTransition_HaltedToLiveBlocked(t *testing.T) {

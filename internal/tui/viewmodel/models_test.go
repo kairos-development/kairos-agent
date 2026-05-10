@@ -19,6 +19,8 @@ func TestNewDashboard(t *testing.T) {
 		License:          entity.LicenseStateDemo,
 		LastUpdatedAtUTC: now.Add(-5 * time.Minute),
 		NTPDrift:         50 * time.Millisecond,
+		HaltReason:       "stream gap",
+		HaltedAtUTC:      &now,
 	}
 
 	positions := []*entity.Position{
@@ -73,6 +75,8 @@ func TestNewDashboard(t *testing.T) {
 	assert.Equal(t, "paper_trading", dashboard.SystemStatus.Mode)
 	assert.Equal(t, "connected", dashboard.SystemStatus.Connectivity)
 	assert.Equal(t, "demo", dashboard.SystemStatus.License)
+	assert.Equal(t, "stream gap", dashboard.SystemStatus.HaltReason)
+	assert.Equal(t, now.Format("15:04:05"), dashboard.SystemStatus.HaltedAt)
 	assert.Equal(t, 2, dashboard.Performance.OpenPositions)
 	assert.Equal(t, 1, dashboard.Performance.ActiveOrders)
 	assert.Equal(t, "+$225.00", dashboard.Performance.TotalPnL)

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/kairos-development/kairos-agent/internal/domain/entity"
-	"github.com/shopspring/decimal"
 )
 
 // OrderRepository implements domain storage.OrderRepository for SQLite.
@@ -289,22 +288,42 @@ func scanOrder(row interface {
 		order.ExchangeOrderID = exchangeOrderID.String
 	}
 
-	order.Quantity, _ = decimal.NewFromString(qtyStr)
-	order.Price, _ = decimal.NewFromString(priceStr)
-	order.FilledQty, _ = decimal.NewFromString(filledQtyStr)
-	order.RemainingQty, _ = decimal.NewFromString(remainingQtyStr)
-	order.AvgFillPrice, _ = decimal.NewFromString(avgPriceStr)
+	if order.Quantity, err = parseDecimalField("orders.quantity", qtyStr); err != nil {
+		return nil, err
+	}
+	if order.Price, err = parseDecimalField("orders.price", priceStr); err != nil {
+		return nil, err
+	}
+	if order.FilledQty, err = parseDecimalField("orders.filled_qty", filledQtyStr); err != nil {
+		return nil, err
+	}
+	if order.RemainingQty, err = parseDecimalField("orders.remaining_qty", remainingQtyStr); err != nil {
+		return nil, err
+	}
+	if order.AvgFillPrice, err = parseDecimalField("orders.avg_fill_price", avgPriceStr); err != nil {
+		return nil, err
+	}
 
-	order.CreatedAtUTC, _ = time.Parse(time.RFC3339Nano, createdAt)
-	order.UpdatedAtUTC, _ = time.Parse(time.RFC3339Nano, updatedAt)
+	if order.CreatedAtUTC, err = parseTimeField("orders.created_at_utc", createdAt); err != nil {
+		return nil, err
+	}
+	if order.UpdatedAtUTC, err = parseTimeField("orders.updated_at_utc", updatedAt); err != nil {
+		return nil, err
+	}
 
 	if submittedAt.Valid {
-		t, _ := time.Parse(time.RFC3339Nano, submittedAt.String)
+		t, err := parseTimeField("orders.submitted_at_utc", submittedAt.String)
+		if err != nil {
+			return nil, err
+		}
 		order.SubmittedAtUTC = &t
 	}
 
 	if filledAt.Valid {
-		t, _ := time.Parse(time.RFC3339Nano, filledAt.String)
+		t, err := parseTimeField("orders.filled_at_utc", filledAt.String)
+		if err != nil {
+			return nil, err
+		}
 		order.FilledAtUTC = &t
 	}
 

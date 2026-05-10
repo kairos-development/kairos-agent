@@ -101,6 +101,28 @@ func TestOrderRepository_Create(t *testing.T) {
 	assert.True(t, retrieved.Quantity.Equal(decimal.NewFromFloat(0.1)))
 }
 
+func TestOrderRepository_GetByID_RejectsCorruptDecimal(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := db.Conn().Exec(`
+		INSERT INTO orders (
+			id, client_order_id, exchange_order_id, strategy_id, symbol,
+			side, type, status, time_in_force, quantity, price,
+			filled_qty, remaining_qty, avg_fill_price,
+			created_at_utc, updated_at_utc, submitted_at_utc, filled_at_utc
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, "bad-order", "client-bad", nil, "strategy1", "BTCUSDT",
+		entity.OrderSideBuy, entity.OrderTypeLimit, entity.OrderStatusSubmitted, entity.TimeInForceGTC,
+		"not-a-decimal", "50000", "0", "1", "0", now, now, nil, nil)
+	require.NoError(t, err)
+
+	_, err = NewOrderRepository(db).GetByID(context.Background(), "bad-order")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "orders.quantity")
+}
+
 func TestOrderRepository_Create_DuplicateKey(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()

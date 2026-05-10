@@ -2,6 +2,7 @@ package events
 
 import (
 	"context"
+	"fmt"
 	"sync"
 )
 
@@ -47,13 +48,17 @@ func (p *Publisher) SubscribeFunc(eventType EventType, fn func(ctx context.Conte
 // Handlers are invoked synchronously in registration order.
 // If a handler returns an error, subsequent handlers are still invoked.
 func (p *Publisher) Publish(ctx context.Context, event Event) error {
+	if event == nil {
+		return fmt.Errorf("event is nil")
+	}
+
 	p.mu.RLock()
-	handlers := p.handlers[event.Type()]
+	handlers := append([]Handler(nil), p.handlers[event.Type()]...)
 	p.mu.RUnlock()
 
 	var firstErr error
 	for _, handler := range handlers {
-		if err := handler.Handle(ctx, event); err != nil && firstErr == nil {
+		if err := safeHandle(ctx, handler, event); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
@@ -67,4 +72,14 @@ func (p *Publisher) PublishAsync(ctx context.Context, event Event) {
 	go func() {
 		_ = p.Publish(ctx, event)
 	}()
+}
+
+func safeHandle(ctx context.Context, handler Handler, event Event) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("event handler panic: %v", r)
+		}
+	}()
+
+	return handler.Handle(ctx, event)
 }

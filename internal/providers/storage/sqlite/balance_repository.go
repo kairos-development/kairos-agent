@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/kairos-development/kairos-agent/internal/domain/entity"
-	"github.com/shopspring/decimal"
 )
 
 // BalanceRepository implements domain storage.BalanceRepository for SQLite.
@@ -84,10 +83,18 @@ func (r *BalanceRepository) GetLatest(ctx context.Context) (*entity.AccountBalan
 			return nil, fmt.Errorf("scan balance: %w", err)
 		}
 
-		bal.Total, _ = decimal.NewFromString(totalStr)
-		bal.Available, _ = decimal.NewFromString(availableStr)
-		bal.Locked, _ = decimal.NewFromString(lockedStr)
-		bal.UpdatedAtUTC, _ = time.Parse(time.RFC3339Nano, updatedAt)
+		if bal.Total, err = parseDecimalField("balances.total", totalStr); err != nil {
+			return nil, err
+		}
+		if bal.Available, err = parseDecimalField("balances.available", availableStr); err != nil {
+			return nil, err
+		}
+		if bal.Locked, err = parseDecimalField("balances.locked", lockedStr); err != nil {
+			return nil, err
+		}
+		if bal.UpdatedAtUTC, err = parseTimeField("balances.updated_at_utc", updatedAt); err != nil {
+			return nil, err
+		}
 
 		if latestUpdate.IsZero() {
 			latestUpdate = bal.UpdatedAtUTC
@@ -184,10 +191,18 @@ func (r *BalanceRepository) getSnapshotAt(ctx context.Context, timestamp time.Ti
 			return nil, fmt.Errorf("scan balance: %w", err)
 		}
 
-		bal.Total, _ = decimal.NewFromString(totalStr)
-		bal.Available, _ = decimal.NewFromString(availableStr)
-		bal.Locked, _ = decimal.NewFromString(lockedStr)
-		bal.UpdatedAtUTC, _ = time.Parse(time.RFC3339Nano, updatedAt)
+		if bal.Total, err = parseDecimalField("balances.total", totalStr); err != nil {
+			return nil, err
+		}
+		if bal.Available, err = parseDecimalField("balances.available", availableStr); err != nil {
+			return nil, err
+		}
+		if bal.Locked, err = parseDecimalField("balances.locked", lockedStr); err != nil {
+			return nil, err
+		}
+		if bal.UpdatedAtUTC, err = parseTimeField("balances.updated_at_utc", updatedAt); err != nil {
+			return nil, err
+		}
 
 		balances = append(balances, bal)
 	}

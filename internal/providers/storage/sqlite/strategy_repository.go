@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/kairos-development/kairos-agent/internal/domain/entity"
-	"github.com/shopspring/decimal"
 )
 
 // StrategyRepository implements domain storage.StrategyRepository for SQLite.
@@ -235,21 +234,39 @@ func scanStrategy(row interface {
 		return nil, err
 	}
 
-	strategy.MaxPositionSize, _ = decimal.NewFromString(maxPosStr)
-	strategy.MaxDailyLoss, _ = decimal.NewFromString(maxLossStr)
-	strategy.CurrentPnL, _ = decimal.NewFromString(currentPnLStr)
-	strategy.DailyPnL, _ = decimal.NewFromString(dailyPnLStr)
+	if strategy.MaxPositionSize, err = parseDecimalField("strategies.max_position_size", maxPosStr); err != nil {
+		return nil, err
+	}
+	if strategy.MaxDailyLoss, err = parseDecimalField("strategies.max_daily_loss", maxLossStr); err != nil {
+		return nil, err
+	}
+	if strategy.CurrentPnL, err = parseDecimalField("strategies.current_pnl", currentPnLStr); err != nil {
+		return nil, err
+	}
+	if strategy.DailyPnL, err = parseDecimalField("strategies.daily_pnl", dailyPnLStr); err != nil {
+		return nil, err
+	}
 
-	strategy.CreatedAtUTC, _ = time.Parse(time.RFC3339Nano, createdAt)
-	strategy.UpdatedAtUTC, _ = time.Parse(time.RFC3339Nano, updatedAt)
+	if strategy.CreatedAtUTC, err = parseTimeField("strategies.created_at_utc", createdAt); err != nil {
+		return nil, err
+	}
+	if strategy.UpdatedAtUTC, err = parseTimeField("strategies.updated_at_utc", updatedAt); err != nil {
+		return nil, err
+	}
 
 	if startedAt.Valid {
-		t, _ := time.Parse(time.RFC3339Nano, startedAt.String)
+		t, err := parseTimeField("strategies.started_at_utc", startedAt.String)
+		if err != nil {
+			return nil, err
+		}
 		strategy.StartedAtUTC = &t
 	}
 
 	if stoppedAt.Valid {
-		t, _ := time.Parse(time.RFC3339Nano, stoppedAt.String)
+		t, err := parseTimeField("strategies.stopped_at_utc", stoppedAt.String)
+		if err != nil {
+			return nil, err
+		}
 		strategy.StoppedAtUTC = &t
 	}
 

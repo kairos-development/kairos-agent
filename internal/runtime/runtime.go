@@ -42,7 +42,7 @@ func NewManager(version string, logger *logrus.Logger) *Manager {
 func (m *Manager) Snapshot() Status {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.status
+	return cloneStatus(m.status)
 }
 
 // Transition attempts a state change through the state machine.
@@ -52,8 +52,20 @@ func (m *Manager) Transition(to entity.RunMode, reason string) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	now := time.Now().UTC()
 	m.status.Mode = to
-	m.status.LastUpdatedAtUTC = time.Now().UTC()
+	if to == entity.RunModeHalted {
+		m.status.HaltReason = reason
+		m.status.HaltedAtUTC = &now
+		m.status.NewEntriesBlocked = true
+		m.status.Banner = haltedBanner(reason)
+	} else if to == entity.RunModeIdle && m.status.HaltReason != "" {
+		m.status.HaltReason = ""
+		m.status.HaltedAtUTC = nil
+		m.status.NewEntriesBlocked = false
+		m.status.Banner = ""
+	}
+	m.status.LastUpdatedAtUTC = now
 	return nil
 }
 

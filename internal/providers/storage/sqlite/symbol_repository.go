@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/kairos-development/kairos-agent/internal/domain/entity"
-	"github.com/shopspring/decimal"
 )
 
 // SymbolRepository implements domain storage.SymbolRepository for SQLite.
@@ -169,16 +168,36 @@ func scanSymbol(row interface {
 		return nil, err
 	}
 
-	symbol.MinOrderQty, _ = decimal.NewFromString(minQtyStr)
-	symbol.MaxOrderQty, _ = decimal.NewFromString(maxQtyStr)
-	symbol.MinPrice, _ = decimal.NewFromString(minPriceStr)
-	symbol.MaxPrice, _ = decimal.NewFromString(maxPriceStr)
-	symbol.TickSize, _ = decimal.NewFromString(tickSizeStr)
-	symbol.StepSize, _ = decimal.NewFromString(stepSizeStr)
-	symbol.MinNotional, _ = decimal.NewFromString(minNotionalStr)
-	symbol.MakerFee, _ = decimal.NewFromString(makerFeeStr)
-	symbol.TakerFee, _ = decimal.NewFromString(takerFeeStr)
-	symbol.UpdatedAtUTC, _ = time.Parse(time.RFC3339Nano, updatedAt)
+	if symbol.MinOrderQty, err = parseDecimalField("symbols.min_order_qty", minQtyStr); err != nil {
+		return nil, err
+	}
+	if symbol.MaxOrderQty, err = parseDecimalField("symbols.max_order_qty", maxQtyStr); err != nil {
+		return nil, err
+	}
+	if symbol.MinPrice, err = parseDecimalField("symbols.min_price", minPriceStr); err != nil {
+		return nil, err
+	}
+	if symbol.MaxPrice, err = parseDecimalField("symbols.max_price", maxPriceStr); err != nil {
+		return nil, err
+	}
+	if symbol.TickSize, err = parseDecimalField("symbols.tick_size", tickSizeStr); err != nil {
+		return nil, err
+	}
+	if symbol.StepSize, err = parseDecimalField("symbols.step_size", stepSizeStr); err != nil {
+		return nil, err
+	}
+	if symbol.MinNotional, err = parseDecimalField("symbols.min_notional", minNotionalStr); err != nil {
+		return nil, err
+	}
+	if symbol.MakerFee, err = parseDecimalField("symbols.maker_fee", makerFeeStr); err != nil {
+		return nil, err
+	}
+	if symbol.TakerFee, err = parseDecimalField("symbols.taker_fee", takerFeeStr); err != nil {
+		return nil, err
+	}
+	if symbol.UpdatedAtUTC, err = parseTimeField("symbols.updated_at_utc", updatedAt); err != nil {
+		return nil, err
+	}
 
 	return &symbol, nil
 }

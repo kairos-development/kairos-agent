@@ -466,6 +466,53 @@ func TestReconciler_ReconcilePositions_PositionClosed(t *testing.T) {
 	}
 }
 
+func TestReconciler_ReconcilePositions_MissingExchangePositionClosesLocal(t *testing.T) {
+	connector := &mockExchangeConnector{
+		getPositionsFunc: func(ctx context.Context) ([]*entity.Position, error) {
+			return []*entity.Position{}, nil
+		},
+	}
+
+	orderRepo := newMockOrderRepository()
+	positionRepo := newMockPositionRepository()
+	publisher := events.NewPublisher()
+
+	localPosition := &entity.Position{
+		ID:            "pos_1",
+		Symbol:        "BTCUSDT",
+		Quantity:      decimal.NewFromFloat(0.1),
+		Side:          entity.PositionSideLong,
+		UnrealizedPnL: decimal.NewFromInt(100),
+	}
+	positionRepo.Create(context.Background(), localPosition)
+
+	reconciler := NewReconciler(connector, orderRepo, positionRepo, publisher, nil)
+
+	ctx := context.Background()
+	result, err := reconciler.ReconcilePositions(ctx)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if result.PositionsUpdated != 1 {
+		t.Errorf("expected 1 position updated, got %d", result.PositionsUpdated)
+	}
+
+	updatedPosition, _ := positionRepo.GetByID(ctx, "pos_1")
+	if updatedPosition == nil {
+		t.Fatal("expected updated position")
+	}
+	if !updatedPosition.Quantity.IsZero() {
+		t.Errorf("expected position quantity to be zero, got %s", updatedPosition.Quantity.String())
+	}
+	if updatedPosition.Side != entity.PositionSideFlat {
+		t.Errorf("expected side flat, got %s", updatedPosition.Side)
+	}
+	if updatedPosition.ClosedAtUTC == nil {
+		t.Error("expected closed timestamp to be set")
+	}
+}
+
 func TestReconciler_ReconcilePositions_StateMismatch(t *testing.T) {
 	exchangePosition := &entity.Position{
 		Symbol:        "BTCUSDT",

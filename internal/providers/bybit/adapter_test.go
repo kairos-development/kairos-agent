@@ -2,16 +2,21 @@ package bybit
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
+	domainconnector "github.com/kairos-development/kairos-agent/internal/domain/connector"
 	"github.com/kairos-development/kairos-agent/internal/domain/entity"
+	"github.com/kairos-development/kairos-agent/internal/service/reconciliation"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	connectorpkg "github.com/kairos-development/kairos-contracts/connector"
 )
+
+var _ reconciliation.ExchangeConnector = (*Adapter)(nil)
 
 // MockBybitConnector mocks the Bybit connector for testing
 type MockBybitConnector struct {
@@ -119,6 +124,28 @@ func (m *MockBybitConnector) SubscribeBalance(ctx context.Context) (<-chan *conn
 
 func (m *MockBybitConnector) SubscribeTicker(ctx context.Context, symbol string) (<-chan *connectorpkg.TickerUpdate, error) {
 	return m.tickerChan, m.tickerErr
+}
+
+type mockStreamBybitConnector struct {
+	*MockBybitConnector
+
+	streamChan chan *connectorpkg.StreamEvent
+	streamErr  error
+}
+
+func (m *mockStreamBybitConnector) SubscribeStreamEvents(ctx context.Context) (<-chan *connectorpkg.StreamEvent, error) {
+	return m.streamChan, m.streamErr
+}
+
+type mockPositionSnapshotBybitConnector struct {
+	*MockBybitConnector
+
+	positions    []*connectorpkg.Position
+	positionsErr error
+}
+
+func (m *mockPositionSnapshotBybitConnector) GetPositions(ctx context.Context) ([]*connectorpkg.Position, error) {
+	return m.positions, m.positionsErr
 }
 
 func TestNewAdapter(t *testing.T) {
@@ -683,6 +710,14 @@ func TestAdapter_QueryOrderErr(t *testing.T) {
 	_, err := adapter.QueryOrder(context.Background(), "ext-1")
 	assert.Error(t, err)
 }
+func TestAdapter_QueryOrderStatus(t *testing.T) {
+	now := time.Now()
+	mock := &MockBybitConnector{queryOrderResult: &connectorpkg.Order{ID: "1", Symbol: "ETHUSDT", CreatedAtUTC: now}}
+	adapter := NewAdapter(mock)
+	order, err := adapter.QueryOrderStatus(context.Background(), "ext-1")
+	assert.NoError(t, err)
+	assert.Equal(t, "1", order.ID)
+}
 func TestAdapter_GetPosition(t *testing.T) {
 	mock := &MockBybitConnector{position: &connectorpkg.Position{Symbol: "BTCUSDT", Side: connectorpkg.PositionSideLong}}
 	adapter := NewAdapter(mock)
@@ -695,6 +730,29 @@ func TestAdapter_GetPositionErr(t *testing.T) {
 	adapter := NewAdapter(mock)
 	_, err := adapter.GetPosition(context.Background(), "BTCUSDT")
 	assert.Error(t, err)
+}
+func TestAdapter_GetPositions(t *testing.T) {
+	mock := &mockPositionSnapshotBybitConnector{
+		MockBybitConnector: &MockBybitConnector{},
+		positions: []*connectorpkg.Position{{
+			Symbol:   "BTCUSDT",
+			Side:     connectorpkg.PositionSideLong,
+			Quantity: decimal.NewFromInt(1),
+		}},
+	}
+	adapter := NewAdapter(mock)
+
+	positions, err := adapter.GetPositions(context.Background())
+	assert.NoError(t, err)
+	require.Len(t, positions, 1)
+	assert.Equal(t, "BTCUSDT", positions[0].Symbol)
+	assert.Equal(t, entity.PositionSideLong, positions[0].Side)
+}
+func TestAdapter_GetPositionsUnsupported(t *testing.T) {
+	adapter := NewAdapter(&MockBybitConnector{})
+
+	_, err := adapter.GetPositions(context.Background())
+	assert.True(t, errors.Is(err, domainconnector.ErrPositionSnapshotsUnsupported))
 }
 func TestAdapter_GetBalance(t *testing.T) {
 	mock := &MockBybitConnector{
@@ -848,6 +906,35 @@ func TestAdapter_SubscribeTickerErr(t *testing.T) {
 
 	_, err := adapter.SubscribeTicker(context.Background(), "BTCUSDT")
 	assert.Error(t, err)
+}
+
+func TestAdapter_SubscribeStreamEvents(t *testing.T) {
+	ch := make(chan *connectorpkg.StreamEvent, 1)
+	ch <- &connectorpkg.StreamEvent{
+		Type:   connectorpkg.StreamEventReconnected,
+		Source: "bybit_private_ws",
+		Reason: "test reconnect",
+	}
+	close(ch)
+
+	mock := &mockStreamBybitConnector{
+		MockBybitConnector: &MockBybitConnector{},
+		streamChan:         ch,
+	}
+	adapter := NewAdapter(mock)
+
+	out, err := adapter.SubscribeStreamEvents(context.Background())
+	require.NoError(t, err)
+	res := <-out
+	assert.Equal(t, domainconnector.StreamEventReconnected, res.Type)
+	assert.Equal(t, "bybit_private_ws", res.Source)
+}
+
+func TestAdapter_SubscribeStreamEventsUnsupported(t *testing.T) {
+	adapter := NewAdapter(&MockBybitConnector{})
+
+	_, err := adapter.SubscribeStreamEvents(context.Background())
+	assert.True(t, errors.Is(err, domainconnector.ErrStreamEventsUnsupported))
 }
 
 func TestAdapter_RefreshSymbols(t *testing.T) {

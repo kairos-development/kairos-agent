@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/kairos-development/kairos-agent/internal/domain/entity"
-	"github.com/shopspring/decimal"
 )
 
 // PositionRepository implements domain storage.PositionRepository for SQLite.
@@ -219,17 +218,34 @@ func scanPosition(row interface {
 		return nil, err
 	}
 
-	position.Quantity, _ = decimal.NewFromString(qtyStr)
-	position.EntryPrice, _ = decimal.NewFromString(entryPriceStr)
-	position.CurrentPrice, _ = decimal.NewFromString(currentPriceStr)
-	position.UnrealizedPnL, _ = decimal.NewFromString(unrealizedStr)
-	position.RealizedPnL, _ = decimal.NewFromString(realizedStr)
+	if position.Quantity, err = parseDecimalField("positions.quantity", qtyStr); err != nil {
+		return nil, err
+	}
+	if position.EntryPrice, err = parseDecimalField("positions.entry_price", entryPriceStr); err != nil {
+		return nil, err
+	}
+	if position.CurrentPrice, err = parseDecimalField("positions.current_price", currentPriceStr); err != nil {
+		return nil, err
+	}
+	if position.UnrealizedPnL, err = parseDecimalField("positions.unrealized_pnl", unrealizedStr); err != nil {
+		return nil, err
+	}
+	if position.RealizedPnL, err = parseDecimalField("positions.realized_pnl", realizedStr); err != nil {
+		return nil, err
+	}
 
-	position.OpenedAtUTC, _ = time.Parse(time.RFC3339Nano, openedAt)
-	position.UpdatedAtUTC, _ = time.Parse(time.RFC3339Nano, updatedAt)
+	if position.OpenedAtUTC, err = parseTimeField("positions.opened_at_utc", openedAt); err != nil {
+		return nil, err
+	}
+	if position.UpdatedAtUTC, err = parseTimeField("positions.updated_at_utc", updatedAt); err != nil {
+		return nil, err
+	}
 
 	if closedAt.Valid {
-		t, _ := time.Parse(time.RFC3339Nano, closedAt.String)
+		t, err := parseTimeField("positions.closed_at_utc", closedAt.String)
+		if err != nil {
+			return nil, err
+		}
 		position.ClosedAtUTC = &t
 	}
 

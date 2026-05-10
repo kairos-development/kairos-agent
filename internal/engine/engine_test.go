@@ -5,7 +5,10 @@ import (
 	"testing"
 	"time"
 
+	domainconnector "github.com/kairos-development/kairos-agent/internal/domain/connector"
+	"github.com/kairos-development/kairos-agent/internal/domain/entity"
 	"github.com/kairos-development/kairos-agent/internal/domain/events"
+	"github.com/kairos-development/kairos-agent/internal/service/agent"
 	"github.com/shopspring/decimal"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
@@ -107,6 +110,93 @@ func TestEngine_GetSetConnector(t *testing.T) {
 	// Set connector (using nil as mock)
 	engine.SetConnector(nil)
 	assert.Nil(t, engine.GetConnector())
+}
+
+func TestEngine_StreamEventGapHaltsLiveTradingAndReconciles(t *testing.T) {
+	ctx := context.Background()
+	logger := logrus.New()
+	logger.SetLevel(logrus.FatalLevel)
+
+	orderSvc := &streamEventOrderService{
+		reconciled: make(chan struct{}, 1),
+	}
+	conn := &streamEventConnector{
+		events: make(chan *domainconnector.StreamEvent, 1),
+	}
+
+	engine := New(ctx, orderSvc, nil, logger)
+	engine.SetConnector(conn)
+
+	err := engine.Start()
+	require.NoError(t, err)
+	defer func() {
+		_ = engine.Stop()
+	}()
+
+	err = engine.TransitionTo(StateLiveTrading, "start live trading")
+	require.NoError(t, err)
+
+	conn.events <- &domainconnector.StreamEvent{
+		Type:          domainconnector.StreamEventGap,
+		Source:        "bybit_private_ws",
+		Reason:        "test stream gap",
+		OccurredAtUTC: time.Now().UTC(),
+	}
+
+	select {
+	case <-orderSvc.reconciled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for reconciliation after stream event")
+	}
+
+	require.Eventually(t, func() bool {
+		return engine.State() == StateHalted
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestEngine_StreamEventReconnectUsesFullReconciler(t *testing.T) {
+	ctx := context.Background()
+	logger := logrus.New()
+	logger.SetLevel(logrus.FatalLevel)
+
+	orderSvc := &streamEventOrderService{
+		reconciled: make(chan struct{}, 1),
+	}
+	reconciler := &streamEventReconciler{
+		reconciled: make(chan struct{}, 1),
+	}
+	conn := &streamEventConnector{
+		events: make(chan *domainconnector.StreamEvent, 1),
+	}
+
+	engine := New(ctx, orderSvc, nil, logger)
+	engine.SetConnector(conn)
+	engine.SetReconciliationService(reconciler)
+
+	err := engine.Start()
+	require.NoError(t, err)
+	defer func() {
+		_ = engine.Stop()
+	}()
+
+	conn.events <- &domainconnector.StreamEvent{
+		Type:          domainconnector.StreamEventReconnected,
+		Source:        "bybit_private_ws",
+		Reason:        "test reconnect",
+		OccurredAtUTC: time.Now().UTC(),
+	}
+
+	select {
+	case <-reconciler.reconciled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for full reconciliation after reconnect")
+	}
+
+	select {
+	case <-orderSvc.reconciled:
+		t.Fatal("expected full reconciler to take precedence over order fallback")
+	default:
+	}
 }
 
 // TestEngine_GetSetStorage tests storage getter/setter.
@@ -758,4 +848,124 @@ func TestEngine_StateTransitionsInAllStates(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, StateIdle, engine.State())
 	}
+}
+
+type streamEventOrderService struct {
+	reconciled chan struct{}
+}
+
+type streamEventReconciler struct {
+	reconciled chan struct{}
+}
+
+func (r *streamEventReconciler) ReconcileAll(ctx context.Context) error {
+	select {
+	case r.reconciled <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+func (s *streamEventOrderService) CreateOrder(ctx context.Context, req agent.CreateOrderRequest) (*entity.Order, error) {
+	return nil, nil
+}
+
+func (s *streamEventOrderService) SubmitOrder(ctx context.Context, orderID string) error {
+	return nil
+}
+
+func (s *streamEventOrderService) CancelOrder(ctx context.Context, orderID string) error {
+	return nil
+}
+
+func (s *streamEventOrderService) GetOrder(ctx context.Context, orderID string) (*entity.Order, error) {
+	return nil, nil
+}
+
+func (s *streamEventOrderService) ListOrders(ctx context.Context, strategyID string, limit, offset int) ([]*entity.Order, error) {
+	return nil, nil
+}
+
+func (s *streamEventOrderService) ReconcileOrders(ctx context.Context) error {
+	select {
+	case s.reconciled <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+type streamEventConnector struct {
+	events chan *domainconnector.StreamEvent
+}
+
+func (c *streamEventConnector) Name() string {
+	return "stream-test"
+}
+
+func (c *streamEventConnector) Connect(ctx context.Context) error {
+	return nil
+}
+
+func (c *streamEventConnector) Disconnect(ctx context.Context) error {
+	return nil
+}
+
+func (c *streamEventConnector) IsConnected() bool {
+	return true
+}
+
+func (c *streamEventConnector) SubmitOrder(ctx context.Context, order *entity.Order) (string, error) {
+	return "", nil
+}
+
+func (c *streamEventConnector) CancelOrder(ctx context.Context, orderID string) error {
+	return nil
+}
+
+func (c *streamEventConnector) GetOpenOrders(ctx context.Context) ([]*entity.Order, error) {
+	return nil, nil
+}
+
+func (c *streamEventConnector) QueryOrder(ctx context.Context, orderID string) (*entity.Order, error) {
+	return nil, nil
+}
+
+func (c *streamEventConnector) GetPosition(ctx context.Context, symbol string) (*entity.Position, error) {
+	return nil, nil
+}
+
+func (c *streamEventConnector) GetBalance(ctx context.Context) (*entity.AccountBalance, error) {
+	return nil, nil
+}
+
+func (c *streamEventConnector) GetSymbol(ctx context.Context, symbol string) (*entity.Symbol, error) {
+	return nil, nil
+}
+
+func (c *streamEventConnector) RefreshSymbols(ctx context.Context) error {
+	return nil
+}
+
+func (c *streamEventConnector) CheckPermissions(ctx context.Context) (*domainconnector.Permissions, error) {
+	return &domainconnector.Permissions{CanRead: true, CanTrade: true}, nil
+}
+
+func (c *streamEventConnector) SubscribeOrders(ctx context.Context) (<-chan *domainconnector.OrderUpdate, error) {
+	return nil, nil
+}
+
+func (c *streamEventConnector) SubscribePositions(ctx context.Context) (<-chan *domainconnector.PositionUpdate, error) {
+	return nil, nil
+}
+
+func (c *streamEventConnector) SubscribeBalance(ctx context.Context) (<-chan *domainconnector.BalanceUpdate, error) {
+	return nil, nil
+}
+
+func (c *streamEventConnector) SubscribeTicker(ctx context.Context, symbol string) (<-chan *domainconnector.TickerUpdate, error) {
+	return nil, nil
+}
+
+func (c *streamEventConnector) SubscribeStreamEvents(ctx context.Context) (<-chan *domainconnector.StreamEvent, error) {
+	return c.events, nil
 }

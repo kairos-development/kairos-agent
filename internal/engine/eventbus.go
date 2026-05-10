@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 
@@ -269,7 +270,7 @@ func (eb *EventBus) deliverEvents(ctx context.Context, sub *subscription) {
 				// Channel closed, exit
 				return
 			}
-			sub.sub.OnEvent(ctx, event)
+			eb.safeOnEvent(ctx, sub, event)
 		case <-ctx.Done():
 			// Drain remaining events before exit
 			for {
@@ -278,13 +279,28 @@ func (eb *EventBus) deliverEvents(ctx context.Context, sub *subscription) {
 					if !ok {
 						return
 					}
-					sub.sub.OnEvent(ctx, event)
+					eb.safeOnEvent(ctx, sub, event)
 				default:
 					return
 				}
 			}
 		}
 	}
+}
+
+func (eb *EventBus) safeOnEvent(ctx context.Context, sub *subscription, event Event) {
+	defer func() {
+		if r := recover(); r != nil {
+			eb.logger.WithFields(logrus.Fields{
+				"subscription_id": sub.id,
+				"event_type":      event.Type(),
+				"panic":           r,
+				"stack":           string(debug.Stack()),
+			}).Error("Event subscriber panic recovered")
+		}
+	}()
+
+	sub.sub.OnEvent(ctx, event)
 }
 
 // Shutdown stops the event bus and waits for all delivery goroutines to exit.

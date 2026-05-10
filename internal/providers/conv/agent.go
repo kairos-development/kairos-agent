@@ -1,6 +1,8 @@
 package conv
 
 import (
+	"time"
+
 	"github.com/kairos-development/kairos-agent/internal/config"
 	"github.com/kairos-development/kairos-agent/internal/domain/entity"
 	"github.com/kairos-development/kairos-agent/internal/runtime"
@@ -78,6 +80,11 @@ func ConfigFromDomain(domainCfg entity.AgentConfig) *config.Config {
 
 // RuntimeStatusToDomain converts the runtime-layer model into a domain status.
 func RuntimeStatusToDomain(status runtime.Status) entity.RuntimeStatus {
+	var haltedAt *time.Time
+	if status.HaltedAtUTC != nil {
+		copied := *status.HaltedAtUTC
+		haltedAt = &copied
+	}
 	return entity.RuntimeStatus{
 		Mode:              runModeFromRuntime(status.Mode),
 		Connectivity:      connectivityFromRuntime(status.Connectivity),
@@ -85,6 +92,30 @@ func RuntimeStatusToDomain(status runtime.Status) entity.RuntimeStatus {
 		Integrity:         integrityFromRuntime(status.Integrity),
 		NTPDrift:          status.NTPDrift,
 		NewEntriesBlocked: status.NewEntriesBlocked,
+		HaltReason:        status.HaltReason,
+		HaltedAtUTC:       haltedAt,
+		Banner:            status.Banner,
+		AnalyticsDegraded: status.AnalyticsDegraded,
+		LastUpdatedAtUTC:  status.LastUpdatedAtUTC,
+	}
+}
+
+// RuntimeStatusFromDomain converts a domain runtime status into the runtime-layer model.
+func RuntimeStatusFromDomain(status entity.RuntimeStatus) runtime.Status {
+	var haltedAt *time.Time
+	if status.HaltedAtUTC != nil {
+		copied := *status.HaltedAtUTC
+		haltedAt = &copied
+	}
+	return runtime.Status{
+		Mode:              RunModeToRuntime(status.Mode),
+		Connectivity:      ConnectivityToRuntime(status.Connectivity),
+		License:           LicenseToRuntime(status.License),
+		Integrity:         entity.IntegrityState(status.Integrity),
+		NTPDrift:          status.NTPDrift,
+		NewEntriesBlocked: status.NewEntriesBlocked,
+		HaltReason:        status.HaltReason,
+		HaltedAtUTC:       haltedAt,
 		Banner:            status.Banner,
 		AnalyticsDegraded: status.AnalyticsDegraded,
 		LastUpdatedAtUTC:  status.LastUpdatedAtUTC,

@@ -73,6 +73,14 @@ func (m *mockPaperSimulator) GetOrderStatus(ctx context.Context, orderID string)
 	}, nil
 }
 
+type mockTradingGate struct {
+	err error
+}
+
+func (m *mockTradingGate) CheckNewEntry(ctx context.Context) error {
+	return m.err
+}
+
 func TestNewOrderRouter(t *testing.T) {
 	config := entity.DefaultRouterConfig()
 	connector := &mockExchangeConnector{}
@@ -91,6 +99,44 @@ func TestNewOrderRouter(t *testing.T) {
 
 	if len(router.inFlight) != 0 {
 		t.Errorf("expected empty in-flight map, got %d", len(router.inFlight))
+	}
+}
+
+func TestOrderRouter_SubmitOrder_BlockedByTradingGate(t *testing.T) {
+	config := entity.DefaultRouterConfig()
+	config.Mode = entity.RoutingModeLive
+
+	submitted := false
+	connector := &mockExchangeConnector{
+		submitOrderFunc: func(ctx context.Context, order *entity.Order) (string, error) {
+			submitted = true
+			return "exchange_order_123", nil
+		},
+	}
+	router := NewOrderRouter(config, connector, &mockPaperSimulator{}, events.NewPublisher(), nil)
+	router.SetTradingGate(&mockTradingGate{err: fmt.Errorf("blocked")})
+
+	order := &entity.Order{
+		ID:           "order_1",
+		StrategyID:   "strategy_1",
+		Symbol:       "BTCUSDT",
+		Side:         entity.OrderSideBuy,
+		Type:         entity.OrderTypeLimit,
+		Quantity:     decimal.NewFromFloat(0.1),
+		Price:        decimal.NewFromInt(50000),
+		CreatedAtUTC: time.Now().UTC(),
+	}
+
+	_, err := router.SubmitOrder(context.Background(), order)
+
+	if err == nil {
+		t.Fatal("expected trading gate error")
+	}
+	if submitted {
+		t.Fatal("expected connector submit not to be called")
+	}
+	if router.GetInFlightCount() != 0 {
+		t.Fatalf("expected no in-flight order after gate rejection, got %d", router.GetInFlightCount())
 	}
 }
 

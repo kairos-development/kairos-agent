@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/jmoiron/sqlx"
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/sirupsen/logrus"
+	_ "modernc.org/sqlite"
 )
 
 // DualStreamWriter manages two separate SQLite streams: Critical and Analytics.
@@ -47,23 +48,29 @@ func NewDualStreamWriter(criticalPath, analyticsPath string, logger *logrus.Logg
 	}
 
 	// Open critical database with strict synchronization
-	criticalDB, err := sqlx.Open("sqlite3", criticalPath)
+	criticalDB, err := sqlx.Open("sqlite", criticalPath)
 	if err != nil {
 		logger.WithError(err).Error("Failed to open critical database")
 		return nil, fmt.Errorf("open critical db: %w", err)
+	}
+	cleanup := func() {
+		_ = criticalDB.Close()
 	}
 
 	// Configure critical database
 	if _, err := criticalDB.Exec("PRAGMA synchronous=FULL"); err != nil {
 		logger.WithError(err).Error("Failed to set critical pragma synchronous")
+		cleanup()
 		return nil, fmt.Errorf("set critical pragma: %w", err)
 	}
 	if _, err := criticalDB.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		logger.WithError(err).Error("Failed to set critical journal mode")
+		cleanup()
 		return nil, fmt.Errorf("set critical journal mode: %w", err)
 	}
 	if _, err := criticalDB.Exec("PRAGMA fsync=NORMAL"); err != nil {
 		logger.WithError(err).Error("Failed to set critical fsync")
+		cleanup()
 		return nil, fmt.Errorf("set critical fsync: %w", err)
 	}
 
@@ -74,19 +81,26 @@ func NewDualStreamWriter(criticalPath, analyticsPath string, logger *logrus.Logg
 	logger.WithField("path", criticalPath).Info("Critical database initialized")
 
 	// Open analytics database with relaxed synchronization
-	analyticsDB, err := sqlx.Open("sqlite3", analyticsPath)
+	analyticsDB, err := sqlx.Open("sqlite", analyticsPath)
 	if err != nil {
 		logger.WithError(err).Error("Failed to open analytics database")
+		cleanup()
 		return nil, fmt.Errorf("open analytics db: %w", err)
+	}
+	cleanup = func() {
+		_ = criticalDB.Close()
+		_ = analyticsDB.Close()
 	}
 
 	// Configure analytics database
 	if _, err := analyticsDB.Exec("PRAGMA synchronous=NORMAL"); err != nil {
 		logger.WithError(err).Error("Failed to set analytics pragma synchronous")
+		cleanup()
 		return nil, fmt.Errorf("set analytics pragma: %w", err)
 	}
 	if _, err := analyticsDB.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		logger.WithError(err).Error("Failed to set analytics journal mode")
+		cleanup()
 		return nil, fmt.Errorf("set analytics journal mode: %w", err)
 	}
 
@@ -140,17 +154,23 @@ func (dsw *DualStreamWriter) WriteAnalytics(eventType string, data map[string]in
 		timestamp: time.Now().UTC(),
 	}
 
+	dsw.mu.Lock()
+	if dsw.closed {
+		dsw.analyticsDropped++
+		dsw.mu.Unlock()
+		return
+	}
+
 	select {
 	case dsw.analyticsCh <- event:
 		// Event queued successfully
 	default:
 		// Queue full, drop event (QoS 0)
-		dsw.mu.Lock()
 		dsw.analyticsDropped++
-		dsw.mu.Unlock()
 
 		dsw.logger.WithField("event_type", eventType).Warn("Analytics event dropped - queue full")
 	}
+	dsw.mu.Unlock()
 }
 
 // analyticsWriter runs in a goroutine and writes queued analytics events.
@@ -160,28 +180,45 @@ func (dsw *DualStreamWriter) analyticsWriter() {
 	for {
 		select {
 		case event := <-dsw.analyticsCh:
-			// Serialize data to JSON to prevent SQL injection
-			dataJSON, err := json.Marshal(event.data)
-			if err != nil {
-				dsw.logger.WithError(err).WithField("event_type", event.eventType).Error("Failed to marshal analytics data")
-				continue
-			}
-
-			// Write to analytics database with parameterized query
-			query := `INSERT INTO analytics (event_type, data, timestamp) VALUES (?, ?, ?)`
-			_, err = dsw.analyticsDB.Exec(query, event.eventType, string(dataJSON), event.timestamp)
-			if err != nil {
-				dsw.logger.WithError(err).WithField("event_type", event.eventType).Error("Analytics write error")
-			}
-
-			dsw.mu.Lock()
-			dsw.analyticsWrites++
-			dsw.mu.Unlock()
+			dsw.writeAnalyticsEvent(event)
 
 		case <-dsw.stopCh:
+			dsw.drainAnalytics()
 			return
 		}
 	}
+}
+
+func (dsw *DualStreamWriter) drainAnalytics() {
+	for {
+		select {
+		case event := <-dsw.analyticsCh:
+			dsw.writeAnalyticsEvent(event)
+		default:
+			return
+		}
+	}
+}
+
+func (dsw *DualStreamWriter) writeAnalyticsEvent(event analyticsEvent) {
+	// Serialize data to JSON to prevent SQL injection.
+	dataJSON, err := json.Marshal(event.data)
+	if err != nil {
+		dsw.logger.WithError(err).WithField("event_type", event.eventType).Error("Failed to marshal analytics data")
+		return
+	}
+
+	// Write to analytics database with parameterized query.
+	query := `INSERT INTO analytics (event_type, data, timestamp) VALUES (?, ?, ?)`
+	_, err = dsw.analyticsDB.Exec(query, event.eventType, string(dataJSON), event.timestamp)
+	if err != nil {
+		dsw.logger.WithError(err).WithField("event_type", event.eventType).Error("Analytics write error")
+		return
+	}
+
+	dsw.mu.Lock()
+	dsw.analyticsWrites++
+	dsw.mu.Unlock()
 }
 
 // Close closes both databases.
@@ -201,13 +238,18 @@ func (dsw *DualStreamWriter) Close() error {
 	dsw.logger.Info("Closing databases")
 
 	// Close databases
+	var errs []string
 	if err := dsw.criticalDB.Close(); err != nil {
 		dsw.logger.WithError(err).Error("Failed to close critical database")
-		return fmt.Errorf("close critical db: %w", err)
+		errs = append(errs, fmt.Sprintf("close critical db: %v", err))
 	}
 	if err := dsw.analyticsDB.Close(); err != nil {
 		dsw.logger.WithError(err).Error("Failed to close analytics database")
-		return fmt.Errorf("close analytics db: %w", err)
+		errs = append(errs, fmt.Sprintf("close analytics db: %v", err))
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("close dual stream writer: %s", strings.Join(errs, "; "))
 	}
 
 	dsw.logger.Info("Databases closed successfully")

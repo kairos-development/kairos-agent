@@ -127,6 +127,7 @@ func TestConfigToDomain_EmptyTrustedKeys(t *testing.T) {
 
 func TestRuntimeStatusToDomain(t *testing.T) {
 	now := time.Now().UTC()
+	haltedAt := now.Add(-time.Minute)
 	status := runtime.Status{
 		Mode:              entity.RunModeLiveTrading,
 		Connectivity:      entity.ConnectivityStateConnected,
@@ -134,6 +135,8 @@ func TestRuntimeStatusToDomain(t *testing.T) {
 		Integrity:         entity.IntegrityStateTrusted,
 		NTPDrift:          12 * time.Millisecond,
 		NewEntriesBlocked: false,
+		HaltReason:        "ws gap",
+		HaltedAtUTC:       &haltedAt,
 		Banner:            "Test Banner",
 		AnalyticsDegraded: true,
 		LastUpdatedAtUTC:  now,
@@ -147,6 +150,9 @@ func TestRuntimeStatusToDomain(t *testing.T) {
 	assert.Equal(t, entity.IntegrityStateTrusted, result.Integrity)
 	assert.Equal(t, 12*time.Millisecond, result.NTPDrift)
 	assert.False(t, result.NewEntriesBlocked)
+	assert.Equal(t, "ws gap", result.HaltReason)
+	assert.Equal(t, &haltedAt, result.HaltedAtUTC)
+	assert.NotSame(t, &haltedAt, result.HaltedAtUTC)
 	assert.Equal(t, "Test Banner", result.Banner)
 	assert.True(t, result.AnalyticsDegraded)
 	assert.Equal(t, now, result.LastUpdatedAtUTC)

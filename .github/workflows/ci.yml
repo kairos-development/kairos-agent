@@ -93,24 +93,13 @@ jobs:
           fi
 
   no-float64:
-    name: No float64 in trading path
+    name: Quality gates
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check for float64 in trading packages
-        run: |
-          VIOLATIONS=$(grep -rn 'float64' \
-            internal/domain/ \
-            internal/service/ \
-            internal/controllers/ \
-            --include='*.go' | grep -v '//.*float64' || true)
-          if [ -n "$VIOLATIONS" ]; then
-            echo "float64 found in trading path:"
-            echo "$VIOLATIONS"
-            exit 1
-          fi
-          echo "No float64 violations in trading path"
+      - name: Run production quality gates
+        run: bash .github/scripts/quality-gates.sh
 
   godoc:
     name: GoDoc check

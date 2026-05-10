@@ -12,7 +12,6 @@ require (
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/kairos-development/kairos-connectors v0.0.0-00010101000000-000000000000
 	github.com/kairos-development/kairos-contracts v0.0.0-00010101000000-000000000000
-	github.com/mattn/go-sqlite3 v1.14.22
 	github.com/prometheus/client_golang v1.23.2
 	github.com/shopspring/decimal v1.4.0
 	github.com/sirupsen/logrus v1.9.4
@@ -73,4 +72,3 @@ replace (
 	github.com/kairos-development/kairos-connectors => ../kairos-connectors
 	github.com/kairos-development/kairos-contracts => ../kairos-contracts
 )
-

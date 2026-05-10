@@ -9,4 +9,5 @@ type CheckOutput struct {
 	Connectivity    string
 	License         string
 	Integrity       string
+	HaltReason      string
 }

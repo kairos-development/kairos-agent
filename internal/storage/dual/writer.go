@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx"
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/sirupsen/logrus"
 )
 
@@ -107,23 +106,45 @@ func NewWriter(cfg Config, logger *logrus.Logger) (*Writer, error) {
 }
 
 func openCriticalDB(path string) (*sqlx.DB, error) {
-	db, err := sqlx.Open("sqlite3", path+"?_busy_timeout=5000&_journal_mode=WAL&_synchronous=FULL")
+	db, err := sqlx.Open("sqlite", path)
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
+	if err := configureSQLite(db, "FULL"); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return db, nil
 }
 
 func openAnalyticsDB(path string) (*sqlx.DB, error) {
-	db, err := sqlx.Open("sqlite3", path+"?_busy_timeout=5000&_journal_mode=WAL&_synchronous=NORMAL")
+	db, err := sqlx.Open("sqlite", path)
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(10)
 	db.SetMaxIdleConns(5)
+	if err := configureSQLite(db, "NORMAL"); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return db, nil
+}
+
+func configureSQLite(db *sqlx.DB, synchronous string) error {
+	pragmas := []string{
+		"PRAGMA busy_timeout=5000",
+		"PRAGMA journal_mode=WAL",
+		fmt.Sprintf("PRAGMA synchronous=%s", synchronous),
+	}
+	for _, pragma := range pragmas {
+		if _, err := db.Exec(pragma); err != nil {
+			return fmt.Errorf("configure sqlite %q: %w", pragma, err)
+		}
+	}
+	return nil
 }
 
 func (w *Writer) WriteCritical(ctx context.Context, query string, args ...interface{}) error {

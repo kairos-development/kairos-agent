@@ -9,6 +9,7 @@ import (
 	"github.com/kairos-development/kairos-agent/internal/domain/entity"
 	"github.com/kairos-development/kairos-agent/internal/domain/events"
 	"github.com/kairos-development/kairos-agent/internal/domain/storage"
+	"github.com/shopspring/decimal"
 	"github.com/sirupsen/logrus"
 )
 
@@ -210,8 +211,16 @@ func (r *Reconciler) ReconcilePositions(ctx context.Context) (*ReconcileResult, 
 				}).Warn("Position closed on exchange but open locally")
 
 				// Mark as closed locally
-				localPos.Quantity = exchangePos.Quantity
-				localPos.UpdatedAtUTC = time.Now().UTC()
+				now := time.Now().UTC()
+				localPos.Quantity = decimal.Zero
+				localPos.Side = entity.PositionSideFlat
+				localPos.UnrealizedPnL = decimal.Zero
+				if exchangePos != nil {
+					localPos.CurrentPrice = exchangePos.CurrentPrice
+					localPos.RealizedPnL = exchangePos.RealizedPnL
+				}
+				localPos.UpdatedAtUTC = now
+				localPos.ClosedAtUTC = &now
 
 				if err := r.positionRepo.Update(ctx, localPos); err != nil {
 					r.logger.WithError(err).Error("Failed to update position")

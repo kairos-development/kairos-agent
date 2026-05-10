@@ -195,6 +195,14 @@ func (m *mockSymbolRepo) Upsert(ctx context.Context, symbol *entity.Symbol) erro
 	return nil
 }
 
+type mockTradingGate struct {
+	err error
+}
+
+func (m *mockTradingGate) CheckNewEntry(ctx context.Context) error {
+	return m.err
+}
+
 func TestOrderService_NewOrderService(t *testing.T) {
 	svc := NewOrderService(
 		&mockOrderRepo{},
@@ -208,6 +216,50 @@ func TestOrderService_NewOrderService(t *testing.T) {
 	)
 
 	assert.NotNil(t, svc)
+}
+
+func TestOrderService_CreateOrder_BlockedByTradingGate(t *testing.T) {
+	svc := NewOrderService(
+		&mockOrderRepo{},
+		&mockPositionRepo{},
+		&mockStrategyRepo{},
+		&mockBalanceRepo{},
+		&mockSymbolRepo{},
+		risk.NewEngine(nil),
+		&ConnectorAdapter{},
+		nil,
+		WithTradingGate(&mockTradingGate{err: assert.AnError}),
+	)
+
+	_, err := svc.CreateOrder(context.Background(), CreateOrderRequest{StrategyID: "strategy-1"})
+
+	assert.ErrorIs(t, err, assert.AnError)
+	assert.ErrorContains(t, err, "trading gate")
+}
+
+func TestOrderService_SubmitOrder_BlockedByTradingGate(t *testing.T) {
+	calledRepo := false
+	svc := NewOrderService(
+		&mockOrderRepo{
+			getByIDFunc: func(ctx context.Context, id string) (*entity.Order, error) {
+				calledRepo = true
+				return nil, storage.ErrNotFound
+			},
+		},
+		&mockPositionRepo{},
+		&mockStrategyRepo{},
+		&mockBalanceRepo{},
+		&mockSymbolRepo{},
+		risk.NewEngine(nil),
+		&ConnectorAdapter{},
+		nil,
+		WithTradingGate(&mockTradingGate{err: assert.AnError}),
+	)
+
+	err := svc.SubmitOrder(context.Background(), "order-1")
+
+	assert.ErrorIs(t, err, assert.AnError)
+	assert.False(t, calledRepo, "gate should block before repository lookup")
 }
 
 func TestOrderService_CreateOrder_Success(t *testing.T) {

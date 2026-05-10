@@ -45,8 +45,8 @@ func NewSimulator(initialBalance decimal.Decimal, logger *logrus.Logger) *Simula
 		balance:        initialBalance,
 		lastPrices:     make(map[string]decimal.Decimal),
 		fillDelay:      100 * time.Millisecond,
-		slippageBps:    decimal.NewFromInt(5),        // 0.05% slippage
-		commissionRate: decimal.NewFromFloat(0.0006), // 0.06% commission
+		slippageBps:    decimal.NewFromInt(5),           // 0.05% slippage
+		commissionRate: decimal.NewFromInt(6).Shift(-4), // 0.06% commission
 	}
 }
 

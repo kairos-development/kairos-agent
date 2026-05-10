@@ -22,6 +22,8 @@ func TestNewManager(t *testing.T) {
 	assert.Equal(t, entity.LicenseStateDemo, status.License)
 	assert.Equal(t, entity.IntegrityStateTrusted, status.Integrity)
 	assert.False(t, status.NewEntriesBlocked)
+	assert.Empty(t, status.HaltReason)
+	assert.Nil(t, status.HaltedAtUTC)
 	assert.Empty(t, status.Banner)
 	assert.False(t, status.AnalyticsDegraded)
 }
@@ -34,6 +36,21 @@ func TestManager_Snapshot(t *testing.T) {
 
 	assert.Equal(t, snapshot1.Mode, snapshot2.Mode)
 	assert.Equal(t, snapshot1.Connectivity, snapshot2.Connectivity)
+}
+
+func TestManager_Snapshot_DoesNotExposeHaltTimePointer(t *testing.T) {
+	manager := NewManager("1.0.0", logrus.New())
+	require.NoError(t, manager.Transition(entity.RunModeHalted, "safety stop"))
+
+	snapshot := manager.Snapshot()
+	require.NotNil(t, snapshot.HaltedAtUTC)
+	original := *snapshot.HaltedAtUTC
+
+	*snapshot.HaltedAtUTC = time.Time{}
+
+	next := manager.Snapshot()
+	require.NotNil(t, next.HaltedAtUTC)
+	assert.Equal(t, original, *next.HaltedAtUTC)
 }
 
 func TestManager_Transition(t *testing.T) {
@@ -70,6 +87,11 @@ func TestManager_Transition_HaltedToIdleOnly(t *testing.T) {
 
 	err := manager.Transition(entity.RunModeHalted, "emergency")
 	require.NoError(t, err)
+	halted := manager.Snapshot()
+	assert.Equal(t, "emergency", halted.HaltReason)
+	assert.NotNil(t, halted.HaltedAtUTC)
+	assert.True(t, halted.NewEntriesBlocked)
+	assert.Equal(t, "halted: emergency", halted.Banner)
 
 	err = manager.Transition(entity.RunModeLiveTrading, "should fail")
 	assert.Error(t, err)
@@ -79,6 +101,10 @@ func TestManager_Transition_HaltedToIdleOnly(t *testing.T) {
 
 	status := manager.Snapshot()
 	assert.Equal(t, entity.RunModeIdle, status.Mode)
+	assert.Empty(t, status.HaltReason)
+	assert.Nil(t, status.HaltedAtUTC)
+	assert.False(t, status.NewEntriesBlocked)
+	assert.Empty(t, status.Banner)
 }
 
 func TestManager_SetConnectivity(t *testing.T) {

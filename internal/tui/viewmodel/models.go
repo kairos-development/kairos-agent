@@ -24,6 +24,8 @@ type SystemStatus struct {
 	License      string
 	Uptime       string
 	NTPDrift     string
+	HaltReason   string
+	HaltedAt     string
 }
 
 // Performance - Performance metrics.
@@ -175,6 +177,8 @@ func NewDashboard(status entity.RuntimeStatus, positions []*entity.Position, ord
 			License:      string(status.License),
 			Uptime:       formatDuration(time.Since(status.LastUpdatedAtUTC)),
 			NTPDrift:     formatDuration(status.NTPDrift),
+			HaltReason:   status.HaltReason,
+			HaltedAt:     formatOptionalTime(status.HaltedAtUTC),
 		},
 		Performance: Performance{
 			TotalPnL:      formatMoney(totalPnL),
@@ -188,6 +192,13 @@ func NewDashboard(status entity.RuntimeStatus, positions []*entity.Position, ord
 		ActiveOrders:     orderVMs,
 		RecentActivity:   []Activity{}, // TODO: Get from event log
 	}
+}
+
+func formatOptionalTime(t *time.Time) string {
+	if t == nil || t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format("15:04:05")
 }
 
 // NewPositions creates a positions view model from domain entities.

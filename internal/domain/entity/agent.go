@@ -96,6 +96,8 @@ type RuntimeStatus struct {
 	Integrity         IntegrityState
 	NTPDrift          time.Duration
 	NewEntriesBlocked bool
+	HaltReason        string
+	HaltedAtUTC       *time.Time
 	Banner            string
 	AnalyticsDegraded bool
 	LastUpdatedAtUTC  time.Time
