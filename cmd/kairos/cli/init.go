@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/kairos-development/kairos-agent/internal/config"
 	"github.com/spf13/cobra"
@@ -29,6 +31,7 @@ This is a one-time setup command. Run before first use.`,
 
 	cmd.Flags().String("state-dir", "", "Custom state directory (default: ~/.kairos)")
 	cmd.Flags().Bool("accept-disclaimer", false, "Accept financial risk disclaimer non-interactively")
+	cmd.Flags().String("telemetry", "ask", "Telemetry consent: ask, minimal, off")
 	cmd.Flags().Bool("force", false, "Reinitialize existing profile (destructive)")
 
 	return cmd
@@ -90,6 +93,9 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	cfg := configManager.Current()
+	if err := configureTelemetryConsent(cmd, configManager, cfg); err != nil {
+		return err
+	}
 	fmt.Printf("   ✓ Config created: %s\n", cfg.Paths.ConfigPath)
 	fmt.Printf("   ✓ Trades DB: %s\n", cfg.Paths.TradesDB)
 	fmt.Printf("   ✓ Vault DB: %s\n", cfg.Paths.VaultDB)
@@ -110,6 +116,56 @@ func runInit(cmd *cobra.Command, args []string) error {
 	fmt.Println("\nRun 'kairos' to launch the TUI Command Center.")
 
 	return nil
+}
+
+func configureTelemetryConsent(cmd *cobra.Command, manager *config.Manager, cfg *config.Config) error {
+	mode, _ := cmd.Flags().GetString("telemetry")
+	mode = strings.ToLower(strings.TrimSpace(mode))
+
+	switch mode {
+	case "minimal", "on", "true", "yes":
+		cfg.Telemetry.Enabled = true
+		cfg.Telemetry.Profile = config.TelemetryProfileMinimal
+	case "off", "false", "no":
+		cfg.Telemetry.Enabled = false
+		cfg.Telemetry.Profile = config.TelemetryProfileOff
+	case "ask", "":
+		acceptFlag, _ := cmd.Flags().GetBool("accept-disclaimer")
+		if acceptFlag {
+			fmt.Println("   ✓ Telemetry: minimal profile enabled by default (use --telemetry off to opt out)")
+			return nil
+		}
+		enabled, err := telemetryPrompt()
+		if err != nil {
+			return err
+		}
+		cfg.Telemetry.Enabled = enabled
+		if enabled {
+			cfg.Telemetry.Profile = config.TelemetryProfileMinimal
+		} else {
+			cfg.Telemetry.Profile = config.TelemetryProfileOff
+		}
+	default:
+		return fmt.Errorf("invalid telemetry mode %q (expected ask, minimal, or off)", mode)
+	}
+
+	if err := manager.Apply(cfg); err != nil {
+		return fmt.Errorf("apply telemetry consent: %w", err)
+	}
+	return nil
+}
+
+func telemetryPrompt() (bool, error) {
+	fmt.Println()
+	fmt.Println("Kairos can send minimal telemetry to improve stability and cloud compatibility.")
+	fmt.Println("No API keys, balances, positions, raw strategy code, or secrets are sent.")
+	fmt.Print("Send minimal telemetry? [Y/n]: ")
+	response, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil {
+		return false, err
+	}
+	response = strings.ToLower(strings.TrimSpace(response))
+	return response == "" || response == "y" || response == "yes", nil
 }
 
 func displayDisclaimer(cmd *cobra.Command) error {

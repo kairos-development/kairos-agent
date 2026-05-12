@@ -27,6 +27,9 @@ func TestDefault(t *testing.T) {
 	assert.Equal(t, filepath.Join(stateDir, "audit.log"), cfg.Paths.AuditPath)
 	assert.Equal(t, "1000", cfg.Risk.MaxPosition)
 	assert.Equal(t, "BTCUSDT", cfg.Exchange.DefaultSymbol)
+	assert.Empty(t, cfg.Cloud.BaseURL)
+	assert.Equal(t, "cloud.access_token", cfg.Cloud.AccessTokenRef)
+	assert.False(t, cfg.Cloud.HandshakeEnabled)
 }
 
 func TestNewManager_CreatesDefaultConfig(t *testing.T) {
@@ -395,6 +398,60 @@ func TestValidate_TelemetryProfile(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := Default(t.TempDir())
 			cfg.Telemetry.Profile = tt.profile
+			err := cfg.Validate()
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidate_CloudConfig(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*Config)
+		wantErr   bool
+	}{
+		{
+			name: "disabled without base url",
+		},
+		{
+			name: "valid https base url",
+			configure: func(cfg *Config) {
+				cfg.Cloud.BaseURL = "https://cloud.kairos.local"
+				cfg.Cloud.HandshakeEnabled = true
+			},
+		},
+		{
+			name: "valid local http base url",
+			configure: func(cfg *Config) {
+				cfg.Cloud.BaseURL = "http://127.0.0.1:8080"
+			},
+		},
+		{
+			name: "invalid scheme",
+			configure: func(cfg *Config) {
+				cfg.Cloud.BaseURL = "ftp://cloud.kairos.local"
+			},
+			wantErr: true,
+		},
+		{
+			name: "handshake requires base url",
+			configure: func(cfg *Config) {
+				cfg.Cloud.HandshakeEnabled = true
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default(t.TempDir())
+			if tt.configure != nil {
+				tt.configure(&cfg)
+			}
 			err := cfg.Validate()
 			if tt.wantErr {
 				assert.Error(t, err)

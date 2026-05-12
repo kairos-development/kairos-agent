@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,6 +40,13 @@ type ExchangeConfig struct {
 	DefaultSymbol string `yaml:"default_symbol"`
 }
 
+// CloudConfig captures non-secret Kairos Cloud integration settings.
+type CloudConfig struct {
+	BaseURL          string `yaml:"base_url"`
+	AccessTokenRef   string `yaml:"access_token_ref"`
+	HandshakeEnabled bool   `yaml:"handshake_enabled"`
+}
+
 // Config is the top-level agent configuration file.
 type Config struct {
 	SchemaVersion             int               `yaml:"schema_version"`
@@ -52,6 +60,7 @@ type Config struct {
 	Paths                     PathsConfig       `yaml:"paths"`
 	Risk                      RiskConfig        `yaml:"risk"`
 	Exchange                  ExchangeConfig    `yaml:"exchange"`
+	Cloud                     CloudConfig       `yaml:"cloud"`
 	Edition                   string            `yaml:"edition"`
 	LicenseExpiry             int64             `yaml:"license_expiry"`
 	GraceStartedAt            *time.Time        `yaml:"grace_started_at"`
@@ -95,6 +104,11 @@ func Default(stateDir string) Config {
 		},
 		Risk:     RiskConfig{MaxPosition: "1000"},
 		Exchange: ExchangeConfig{DefaultSymbol: "BTCUSDT"},
+		Cloud: CloudConfig{
+			BaseURL:          "",
+			AccessTokenRef:   "cloud.access_token",
+			HandshakeEnabled: false,
+		},
 	}
 }
 
@@ -210,6 +224,20 @@ func (c *Config) Validate() error {
 	}
 	if err := validateTrustedFingerprints(c.TrustedPluginKeys); err != nil {
 		return err
+	}
+	if c.Cloud.BaseURL != "" {
+		parsed, err := url.ParseRequestURI(c.Cloud.BaseURL)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return fmt.Errorf("invalid cloud.base_url %q", c.Cloud.BaseURL)
+		}
+		switch parsed.Scheme {
+		case "http", "https":
+		default:
+			return fmt.Errorf("cloud.base_url must use http or https")
+		}
+	}
+	if c.Cloud.HandshakeEnabled && c.Cloud.BaseURL == "" {
+		return fmt.Errorf("cloud.base_url is required when cloud.handshake_enabled is true")
 	}
 	return nil
 }

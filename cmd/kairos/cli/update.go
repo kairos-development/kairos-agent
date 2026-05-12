@@ -1,8 +1,14 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"os"
+	"runtime"
+	"time"
 
+	cloudprovider "github.com/kairos-development/kairos-agent/internal/providers/cloud"
 	"github.com/spf13/cobra"
 )
 
@@ -53,12 +59,16 @@ This is a read-only operation, safe to run anytime.`,
 	}
 
 	cmd.Flags().String("channel", "stable", "Update channel (stable, beta, dev)")
+	cmd.Flags().String("cloud-url", os.Getenv("KAIROS_CLOUD_URL"), "Kairos Cloud base URL")
+	cmd.Flags().String("token", os.Getenv("KAIROS_CLOUD_TOKEN"), "Kairos Cloud bearer token (prefer vault/env over shell history)")
 
 	return cmd
 }
 
 func runUpdateCheck(cmd *cobra.Command, args []string) error {
 	channel, _ := cmd.Flags().GetString("channel")
+	cloudURL, _ := cmd.Flags().GetString("cloud-url")
+	token, _ := cmd.Flags().GetString("token")
 
 	fmt.Println("🔍 Checking for updates...")
 	fmt.Println("═══════════════════════════════════════════════════════════")
@@ -66,27 +76,54 @@ func runUpdateCheck(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Channel:         %s\n", channel)
 	fmt.Println()
 
-	// TODO: Implement actual update check
-	fmt.Println("✓ Connected to update server")
-	fmt.Println("✓ Checking latest version...")
-	fmt.Println()
+	client, err := cloudprovider.NewClient(cloudprovider.Config{
+		BaseURL:     cloudURL,
+		AccessToken: token,
+		UserAgent:   "kairos-agent/" + Version,
+		Timeout:     10 * time.Second,
+	})
+	if errors.Is(err, cloudprovider.ErrDisabled) {
+		fmt.Println("Cloud update checks are not configured.")
+		fmt.Println("Set KAIROS_CLOUD_URL or pass --cloud-url to enable signed update metadata checks.")
+		return nil
+	}
+	if err != nil {
+		return err
+	}
 
-	// Mock response
-	latestVersion := "1.0.1"
-	if Version == latestVersion {
+	ctx, cancel := context.WithTimeout(cmd.Context(), 10*time.Second)
+	defer cancel()
+
+	update, err := client.CheckUpdate(ctx, cloudprovider.UpdateQuery{
+		CurrentVersion: Version,
+		Channel:        channel,
+		OS:             runtime.GOOS,
+		Arch:           runtime.GOARCH,
+	})
+	if errors.Is(err, cloudprovider.ErrNoUpdateAvailable) {
 		fmt.Println("✅ You are running the latest version")
 		return nil
 	}
+	if err != nil {
+		return err
+	}
+	if update.Release == nil || update.Artifact == nil {
+		return fmt.Errorf("cloud returned incomplete update metadata")
+	}
 
-	fmt.Printf("📦 Update available: %s → %s\n", Version, latestVersion)
+	fmt.Println("✓ Connected to update server")
+	fmt.Println("✓ Verified signed update metadata is available")
+	fmt.Println()
+	fmt.Printf("📦 Update available: %s → %s\n", Version, update.Release.Version)
 	fmt.Println()
 	fmt.Println("Release notes:")
-	fmt.Println("  - Performance improvements")
-	fmt.Println("  - Bug fixes")
-	fmt.Println("  - Security updates")
+	fmt.Printf("  %s\n", update.Release.NotesURL)
+	fmt.Printf("Criticality: %s\n", update.Release.Criticality)
+	fmt.Printf("Artifact:    %s/%s\n", update.Artifact.OS, update.Artifact.Arch)
+	fmt.Printf("Checksum:    sha256:%s\n", update.Artifact.SHA256)
 	fmt.Println()
 	fmt.Println("To download:")
-	fmt.Println("  kairos update download")
+	fmt.Printf("  kairos update download --version %s\n", update.Release.Version)
 	fmt.Println()
 	fmt.Println("To apply:")
 	fmt.Println("  kairos update apply --confirm")
